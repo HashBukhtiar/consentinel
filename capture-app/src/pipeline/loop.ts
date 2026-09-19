@@ -6,7 +6,7 @@ import { pixelate } from "../vision/blur";
 import { decide } from "../consent/decide";
 import { FilmEmitter } from "../events/filmEvent";
 import { decodeBeacons } from "../stubs/decodeBeacons";
-import { consentStore } from "../stubs/consentStore";
+import { getConsent } from "../consent/store";
 import { flags } from "../config/flags";
 import type { FilmEvent, Track } from "../shared/schema";
 
@@ -71,7 +71,7 @@ export class Pipeline {
 
     const frame = pctx.getImageData(0, 0, procW, procH); // A's decoder reads this
     associate(tracks, decodeBeacons(frame, tMs));
-    decide(tracks, consentStore.get);
+    decide(tracks, getConsent); // sync read of the Solana-synced cache
 
     for (const t of tracks) {
       if (t.blurred) {

@@ -1,0 +1,26 @@
+{
+  "name": "consentinel-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Consentinel notify + audit service: FilmEvent → badge buzz + ElevenLabs alert, tamper-evident audit log anchored on Solana, badge-signed consent relay",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "test": "tsx test/audit.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anchor-lang/core": "^1.2.0",
+    "@noble/hashes": "^1.3.0",
+    "@solana/web3.js": "^1.99.0",
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -3,3 +3,6 @@ dist
 # fetched by `npm run setup` (large binaries) — must run before the demo
 public/wasm
 public/models
+# devnet demo keys written by `npm run seed` (registry/) — never commit
+public/demo
+.env.local
