@@ -7,8 +7,9 @@ import { flags } from "../config/flags";
 // Binding is the ONLY thing in this pipeline that can un-blur someone, so every
 // rule here is written to refuse rather than guess (§2.2 of DECISIONS.md):
 //
-//   * a beacon must be within BIND_MAX_DIST of the face, so a badge decoded
-//     across the room can't claim a stranger;
+//   * a beacon must be within BIND_MAX_FACE_HEIGHTS of the face, so a badge
+//     decoded across the room can't claim a stranger. Measuring in face
+//     heights keeps the rule the same at any camera distance;
 //   * if two faces are near-equidistant the beacon binds to NEITHER, because
 //     a coin-flip here exposes whoever lost the flip;
 //   * one beacon binds one track and one track takes one beacon, so two
@@ -30,7 +31,7 @@ export function associate(tracks: Track[], beacons: BeaconReading[], nowMs: numb
       if (cy > b.imagePosition.y) continue; // face must be above the badge
       const dx = cx - b.imagePosition.x, dy = cy - b.imagePosition.y;
       const d = Math.sqrt(dx * dx + dy * dy);
-      if (d > flags.BIND_MAX_DIST) continue; // too far to plausibly be the wearer
+      if (d > t.bbox.h * flags.BIND_MAX_FACE_HEIGHTS) continue; // not plausibly this face's badge
       cands.push({ t, d });
     }
     cands.sort((p, q) => p.d - q.d);

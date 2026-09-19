@@ -56,7 +56,10 @@ export const flags = {
   // a clear window shrinks inward so it reveals less rather than more.
   CLEAR_INSET: 0.06,
   // Binding is the only thing that can un-blur, so it refuses rather than guesses:
-  BIND_MAX_DIST: 0.28, // max normalized face↔badge distance to bind at all
+  // Max face↔badge distance, in multiples of that face's bbox height. A
+  // chest-worn badge sits ~2-3 face-heights below the face, and that ratio
+  // holds at any camera distance — an absolute normalized cap does not.
+  BIND_MAX_FACE_HEIGHTS: 3.0,
   BIND_AMBIGUOUS_RATIO: 1.25, // runner-up within 25% of the winner ⇒ bind neither
   // How long a binding vouches for a face after the last sighting of its
   // beacon. Stacks on top of BEACON_ID_HOLD_MS (the decoder keeps reporting a

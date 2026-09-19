@@ -18,9 +18,6 @@ const face = (id: string, x: number, y: number): Track => ({
   blurred: true,
   missed: 0,
 });
-// center of the box built above
-const at = (x: number, y: number) => ({ x: x + 0.05, y: y + 0.05 });
-
 // ---------------------------------------------------------------- exclusivity
 // Two badges, one face between them. Without exclusivity both bind the same
 // track and the last writer wins — so an opt_in id can land on the person who
@@ -53,7 +50,7 @@ const at = (x: number, y: number) => ({ x: x + 0.05, y: y + 0.05 });
 {
   const far = face("far", 0.05, 0.05);
   associate([far], [{ beaconId: "AA", imagePosition: { x: 0.95, y: 0.95 }, confidence: 1 }], 1000);
-  assert.equal(far.beaconId, undefined, "beacon beyond BIND_MAX_DIST must not bind");
+  assert.equal(far.beaconId, undefined, "beacon far beyond the wearer's badge offset must not bind");
 }
 
 // ...but a badge worn on the chest of the face right above it still binds.
