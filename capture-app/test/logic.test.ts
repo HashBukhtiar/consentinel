@@ -83,8 +83,8 @@ console.log("ok — chain cache: fail-safe unknown, slot ordering, owner-checked
 
 // 5) stub fallback normalizes beacon ids like the chain cache does
 import { consentStore } from "../src/stubs/consentStore";
-assert.equal(consentStore.get("a1b2"), "opt_out", "stub: case-insensitive");
-assert.equal(consentStore.get("c3d4"), "opt_in");
+assert.equal(consentStore.get("4e"), "opt_out", "stub: case-insensitive");
+assert.equal(consentStore.get("c3"), "opt_in");
 assert.equal(consentStore.get("zz"), "unknown", "stub: garbage ⇒ unknown ⇒ blur");
 consentStore.set("00ab", "opt_in");
 assert.equal(consentStore.get("AB"), "opt_in", "stub: zero-padding");

@@ -7,8 +7,8 @@ export type ConsentState = "opt_in" | "opt_out";
 export type Consent = ConsentState | "unknown"; // "unknown" ⇒ blur (fail-safe)
 
 export interface BeaconReading {
-  beaconId: string;
-  imagePosition: { x: number; y: number }; // normalized [0,1], the LED location
+  beaconId: string; // two uppercase hex digits — hex2() in @shared/beacon
+  imagePosition: { x: number; y: number }; // normalized [0,1]; center of the patch quad
   confidence: number; // decode confidence 0..1
 }
 

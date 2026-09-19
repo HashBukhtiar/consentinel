@@ -1,8 +1,17 @@
 {
   "compilerOptions": {
-    "types": ["mocha", "chai", "node"],
-    "typeRoots": ["./node_modules/@types"],
-    "lib": ["es2020", "dom"],
+    "types": [
+      "mocha",
+      "chai",
+      "node"
+    ],
+    "typeRoots": [
+      "./node_modules/@types"
+    ],
+    "lib": [
+      "es2020",
+      "dom"
+    ],
     "module": "commonjs",
     "target": "es2020",
     "esModuleInterop": true,
@@ -10,5 +19,12 @@
     "skipLibCheck": true,
     "strict": true
   },
-  "include": ["tests", "client"]
+  "include": [
+    "tests",
+    "client/src",
+    "client/idl"
+  ],
+  "exclude": [
+    "client/scripts"
+  ]
 }

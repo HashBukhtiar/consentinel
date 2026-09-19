@@ -5,6 +5,7 @@
 // that walked out of Wi-Fi range falls back to the poll queue instead of
 // swallowing its buzz.
 import type { WebSocket } from "ws";
+import { normalizeBadgeId } from "../../registry/client/src/core";
 
 export interface BadgeMessage {
   type: "filmed" | "consent" | "hello";
@@ -101,5 +102,5 @@ export class BadgeHub {
 }
 
 export function norm(id: string): string {
-  return id.toUpperCase().padStart(4, "0");
+  return normalizeBadgeId(id);
 }

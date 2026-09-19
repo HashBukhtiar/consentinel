@@ -22,8 +22,10 @@ export const DEFAULT_DELEGATED_TTL_SECS = 120;
 export const MAX_EVENT_ID_LEN = 32;
 
 // ---- badge ids -------------------------------------------------------------
-// The beacon blinks 8–16 bits; the capture app carries it as an upper-case hex
-// string ("A1B2"); on-chain it is a u16.
+// The beacon blinks an 8-bit id today (two upper-case hex digits, `hex2()` in
+// shared/beacon.ts — "4E"); the format allows up to 16 bits (four digits).
+// Canonical string form = the wire form: 2 digits when the value fits in a
+// byte, else 4. On-chain it is a u16 either way.
 
 export function badgeIdToU16(id: string): number {
   const s = id.trim().replace(/^0x/i, "");
@@ -33,10 +35,10 @@ export function badgeIdToU16(id: string): number {
 
 export function u16ToBadgeId(n: number): string {
   if (!Number.isInteger(n) || n < 0 || n > 0xffff) throw new Error(`bad badge id number: ${n}`);
-  return n.toString(16).toUpperCase().padStart(4, "0");
+  return n.toString(16).toUpperCase().padStart(n <= 0xff ? 2 : 4, "0");
 }
 
-/** Canonical form of a beacon id as the capture app sees it: 4 upper-case hex chars. */
+/** Canonical form of a beacon id as the capture app sees it ("4E", or "A1B2" for 16-bit ids). */
 export function normalizeBadgeId(id: string): string {
   return u16ToBadgeId(badgeIdToU16(id));
 }

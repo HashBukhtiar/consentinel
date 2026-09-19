@@ -1,11 +1,23 @@
 {
-  "_comment": "Demo seed for the on-chain registry. Badge ids are what the beacons blink (upper-case hex, 8–16 bits). `consent` is the initial on-chain state; flip it live on stage.",
+  "_comment": "Demo seed for the on-chain registry. Badge ids are what the beacons blink (8-bit, two upper-case hex digits \u2014 see shared/beacon.ts). `consent` is the initial on-chain state; flip it live on stage.",
   "cluster": "devnet",
   "cameraLabel": "cam-1",
   "eventId": "htn2026-demo",
   "badges": [
-    { "badgeId": "A1B2", "consent": false, "label": "left person — opted OUT (blurred)" },
-    { "badgeId": "C3D4", "consent": true,  "label": "right person — opted IN (clear)" },
-    { "badgeId": "E5F6", "consent": false, "label": "spare badge — opted OUT" }
+    {
+      "badgeId": "4E",
+      "consent": false,
+      "label": "Maaz's real badge \u2014 opted OUT (blurred)"
+    },
+    {
+      "badgeId": "A1",
+      "consent": false,
+      "label": "second badge (stub/synthetic) \u2014 opted OUT (blurred)"
+    },
+    {
+      "badgeId": "C3",
+      "consent": true,
+      "label": "consenting badge (stub/synthetic) \u2014 opted IN (clear)"
+    }
   ]
 }

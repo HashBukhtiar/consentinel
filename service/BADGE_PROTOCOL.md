@@ -6,36 +6,36 @@ of the badge endpoints need a token.
 
 ## 1. Receiving "you were filmed"
 
-**Option A — WebSocket (push):** connect to `ws://<laptop-ip>:8787/badge?id=A1B2`
+**Option A — WebSocket (push):** connect to `ws://<laptop-ip>:8787/badge?id=4E`
 (`id` = the hex id this badge blinks). The service sends one JSON object per
 message and pings every 5 s (answer pongs, or it assumes you dropped off and
 falls back to the poll queue):
 
 ```json
-{"type":"hello","beaconId":"A1B2","at":1758300000000}
-{"type":"filmed","beaconId":"A1B2","at":1758300012345,"cameraId":"cam-1","buzzMs":600,"say":"Heads up: badge A 1 B 2, you were just recorded by camera cam-1. ..."}
+{"type":"hello","beaconId":"4E","at":1758300000000}
+{"type":"filmed","beaconId":"4E","at":1758300012345,"cameraId":"cam-1","buzzMs":600,"say":"Heads up: badge 4 E, you were just recorded by camera cam-1. ..."}
 ```
 
 On `filmed`: buzz the haptic/buzzer for `buzzMs`, flash the LEDs red. The
 `say` text is what ElevenLabs speaks on the laptop; the badge can ignore it.
 
-**Option B — HTTP poll (simplest on ESP32):** `GET /badge/A1B2/pending` every
-~1 s. Response `{"beaconId":"A1B2","pending":[ ...messages... ]}`; the queue is
+**Option B — HTTP poll (simplest on ESP32):** `GET /badge/4E/pending` every
+~1 s. Response `{"beaconId":"4E","pending":[ ...messages... ]}`; the queue is
 drained on read, so each message is delivered once (at most 10 are kept).
 
 ## 2. Reading your consent status
 
-`GET /badge/A1B2/consent` →
+`GET /badge/4E/consent` →
 
 ```json
-{"registered":true,"beaconId":"A1B2","consent":false,"nonce":3,"instance":7,
+{"registered":true,"beaconId":"4E","consent":false,"nonce":3,"instance":7,
  "owner":"<base58>","updatedAt":1758300000,"serverTime":1758300100}
 ```
 
 Green LED = `consent:true` (clear), red = `false` (blurred). `nonce`,
 `instance` and `serverTime` are the values to sign in §3.
 
-An unregistered badge gets `{"registered":false,"beaconId":"A1B2","consent":null,
+An unregistered badge gets `{"registered":false,"beaconId":"4E","consent":null,
 "serverTime":...,"note":"..."}` ⇒ red LED; the capture app blurs it
 (fail-safe). Do not attempt §3 until the organizer has registered the badge.
 
@@ -52,7 +52,7 @@ Message bytes (little-endian):
 | offset | len | field |
 |---|---|---|
 | 0 | 22 | ASCII `consentinel/consent/v1` |
-| 22 | 2 | `badge_id` as u16 (e.g. `0xA1B2` → bytes `B2 A1`) |
+| 22 | 2 | `badge_id` as u16 (e.g. `0x4E` → bytes `B2 A1`) |
 | 24 | 1 | `consent`: `1` = opt in, `0` = opt out |
 | 25 | 8 | `nonce` as u64 — must equal `nonce` from §2 (the record's revision) |
 | 33 | 8 | `instance` as u64 — must equal `instance` from §2 (unique per registration) |
@@ -60,11 +60,11 @@ Message bytes (little-endian):
 
 Sign with `crypto_sign_detached` (libsodium, available in ESP-IDF as the
 `libsodium` component; the key format is the standard 64-byte libsodium
-secret key — the same format as `registry/keys/badge-A1B2.json`). Then:
+secret key — the same format as `registry/keys/badge-4E.json`). Then:
 
 ```
 POST /consent/delegated
-{"badgeId":"A1B2","consent":true,"nonce":3,"instance":7,"expiresAt":1758300220,
+{"badgeId":"4E","consent":true,"nonce":3,"instance":7,"expiresAt":1758300220,
  "owner":"<base58 pubkey>","signature":"<64 bytes hex>"}
 ```
 
@@ -103,5 +103,5 @@ void sign_consent(uint16_t badge_id, bool consent, uint64_t nonce, uint64_t inst
 }
 ```
 
-`npm run badge-press -- A1B2 toggle` (in `registry/`) does exactly this from
+`npm run badge-press -- 4E toggle` (in `registry/`) does exactly this from
 the laptop, so the flow can be demoed before the firmware lands.

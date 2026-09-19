@@ -23,8 +23,8 @@ assert.ok(!isFilmEvent({ eventId: "e1", beaconId: "A1B2", at: 1, cameraId: "" })
 const e1 = log.append({ eventId: "e1", beaconId: "1f", at: 1000, cameraId: "cam-1" });
 const e2 = log.append({ eventId: "e2", beaconId: "A1B2", at: 2000, cameraId: "cam-1" });
 const e3 = log.append({ eventId: "e3", beaconId: "a1b2", at: 3000, cameraId: "cam-1" });
-assert.equal(e1.beaconId, "001F", "beacon ids are zero-padded before hashing");
-assert.equal(e1.hash, toHex(filmEventHash({ eventId: "e1", beaconId: "001F", at: 1000, cameraId: "cam-1" })));
+assert.equal(e1.beaconId, "1F", "beacon ids are canonicalized (upper-case, wire width) before hashing");
+assert.equal(e1.hash, toHex(filmEventHash({ eventId: "e1", beaconId: "1F", at: 1000, cameraId: "cam-1" })));
 assert.equal(log.forBadge("a1b2").length, 2);
 
 // nothing attested yet ⇒ head is zero, 3 unanchored

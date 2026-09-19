@@ -38,6 +38,22 @@ operator panel, **grant / revoke / close** send a real transaction; the face
 blurs or clears when the websocket push lands (~1 s), always within the 3 s
 poll.
 
+## Observability (Sentry)
+
+Two products beyond error monitoring, per the track: **Tracing** (a span tree
+`detect → track → decode → associate → decide → blur+notify`, sampled ~1 frame/s
+so the 120fps loop is never touched) and **Logs** (structured consent decisions,
+logged on change, + film events). **Session Replay is deliberately omitted** — it
+would record faces from the video feed, the exact thing the app refuses to do.
+
+Off by default; activate by adding your DSN (Sentry then bundles + turns on):
+
+```bash
+cp .env.example .env.local   # then set VITE_SENTRY_DSN=…
+```
+
+Instrumentation lives in `src/obs/sentry.ts`; no-ops with no DSN.
+
 ## Integration seams
 
 Contracts live in [`src/shared/schema.ts`](src/shared/schema.ts):
@@ -54,6 +70,8 @@ Contracts live in [`src/shared/schema.ts`](src/shared/schema.ts):
 
 ```
 src/sources/videoSource.ts   camera | screen | file → one HTMLVideoElement
+src/decode/beacon.ts         optical decoder: patch → cells → clock → decodeFrame (A's wire format)
+src/decode/patch.ts          patch geometry + pixel paint (shared by decoder & self-check)
 src/vision/detect.ts         MediaPipe BlazeFace (detection only, no identity)
 src/vision/track.ts          IOU tracker → stable trackId, persists blur on occlusion
 src/vision/associate.ts      beacon → nearest face above, sticky on the track
@@ -72,3 +90,10 @@ src/config/flags.ts          §10 flags + perf knobs
 Tuning knobs in `flags.ts`: `PROCESS_WIDTH` (speed), `PIXELATE_SIZE`,
 `TRACK_MAX_MISSED` (occlusion hold), `BLUR_PAD`, `CONSENT_CACHE_SYNC_MS`,
 `CONSENT_STALE_MS`.
+
+**Beacon decoder:** `BEACON_DECODER` is `"stub"` (fixed beacons, safe hero path)
+or `"optical"` (real decode of A's patch). The `BEACON_*` thresholds are tuned
+against Maaz's badge recording — verified decoding id `4E` cleanly, no false ids.
+Re-tune for new footage with `tsx scripts/tune.ts <raw-rgba> <w> <h>` (extract
+frames with `ffmpeg -i clip.mov -vf scale=480:-2 -f rawvideo -pix_fmt rgba out.raw`).
+Unit-tested end-to-end in `test/decode.test.ts` on synthetic frames.

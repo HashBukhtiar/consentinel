@@ -136,15 +136,15 @@ same key and the same on-chain verification the badge will use; to show the
 flip coming from a *separate* actor run, from `registry/`:
 
 ```bash
-npm run toggle -- A1B2 revoke              # owner-signed, deployer pays the fee
-npm run toggle -- A1B2 grant --delegated   # badge-signed, relayed
-npm run badge-press -- A1B2 toggle         # what the ESP32 button does (through the service)
+npm run toggle -- 4E revoke              # owner-signed, deployer pays the fee
+npm run toggle -- 4E grant --delegated   # badge-signed, relayed
+npm run badge-press -- 4E toggle         # what the ESP32 button does (through the service)
 npm run watch                              # tail events from a second terminal
 ```
 
 Audit: `GET http://localhost:8787/audit/verify` recomputes the local hash
 chain from raw fields and compares it to the on-chain head (reports
-`mismatches` and `unanchored`). `GET /audit/events?badge=A1B2` (bearer token
+`mismatches` and `unanchored`). `GET /audit/events?badge=4E` (bearer token
 if `SERVICE_TOKEN` is set) feeds the "who filmed me?" layer.
 
 ### Flags
