@@ -13,6 +13,13 @@ npm run dev     # http://localhost:5173
 npm test        # self-check: tracker, association, fail-safe blur
 ```
 
+**Stop:** `Ctrl+C` in the terminal running `npm run dev`. If it got orphaned in the
+background (no terminal to interrupt), kill it by port:
+
+```bash
+lsof -ti :5173 | xargs kill
+```
+
 Pick **Use camera** (webcam), **Share screen (WhatsApp)** for the glasses feed
 mirrored in a window, or **Load clip** for `DEMO_FALLBACK_MODE`. Toggle a
 beacon's consent in the operator panel to see a face blur/clear live.
