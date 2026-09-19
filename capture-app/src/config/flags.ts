@@ -47,6 +47,20 @@ export const flags = {
   DISPLAY_MAX_WIDTH: 960, // composited output width cap
   IOU_MATCH: 0.3, // tracker match threshold
   TRACK_MAX_MISSED: 10, // frames to hold a blur through occlusion (~0.6s @15fps)
-  BLUR_PAD: 0.35, // pad the bbox — fail-safe covers more, never less
   PIXELATE_SIZE: 14, // block size in px; bigger = blockier
+
+  // ---- default-deny composite + binding guards (see DECISIONS.md §4) ------
+  // The frame is pixelated WHOLE and clear windows are punched out only for
+  // explicit opt_in, so a face the detector never found is still covered.
+  // Inset is the inverse of the old per-box pad: blur covers everything, and
+  // a clear window shrinks inward so it reveals less rather than more.
+  CLEAR_INSET: 0.06,
+  // Binding is the only thing that can un-blur, so it refuses rather than guesses:
+  BIND_MAX_DIST: 0.28, // max normalized face↔badge distance to bind at all
+  BIND_AMBIGUOUS_RATIO: 1.25, // runner-up within 25% of the winner ⇒ bind neither
+  // How long a binding vouches for a face after the last sighting of its
+  // beacon. Stacks on top of BEACON_ID_HOLD_MS (the decoder keeps reporting a
+  // decoded id for that long), so true worst-case staleness is the sum — drop
+  // BEACON_ID_HOLD_MS too if that window feels long.
+  BIND_TTL_MS: 1200,
 };

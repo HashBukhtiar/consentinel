@@ -17,3 +17,37 @@ export function pixelate(
   ctx.drawImage(tmp, 0, 0, tw, th, x, y, w, h); // blow back up
   ctx.imageSmoothingEnabled = true;
 }
+
+// Pixelate the ENTIRE canvas. This is the default-deny composite: blur
+// everything, then punch clear windows back out for explicitly consented
+// faces. Costs two drawImage calls regardless of how many people are present,
+// and means a face the detector never found is still covered.
+export function pixelateAll(ctx: CanvasRenderingContext2D, size: number): void {
+  pixelate(ctx, 0, 0, ctx.canvas.width, ctx.canvas.height, size);
+}
+
+// Redraw one sharp region from the source over the pixelated canvas.
+// `box` is normalized [0,1]; `inset` shrinks it — the inverse of BLUR_PAD.
+// Blur pads OUTWARD to cover more; a clear window insets INWARD to reveal
+// less, so a consented face can't drag a sliver of the person behind them
+// into the clear.
+export function clearWindow(
+  ctx: CanvasRenderingContext2D,
+  src: CanvasImageSource,
+  srcW: number, srcH: number,
+  box: { x: number; y: number; w: number; h: number },
+  inset: number,
+): void {
+  const nx = box.x + (box.w * inset) / 2;
+  const ny = box.y + (box.h * inset) / 2;
+  const nw = box.w * (1 - inset);
+  const nh = box.h * (1 - inset);
+  if (nw <= 0 || nh <= 0) return;
+
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  const dx = Math.max(0, nx * W), dy = Math.max(0, ny * H);
+  const dw = Math.min(nw * W, W - dx), dh = Math.min(nh * H, H - dy);
+  if (dw <= 0 || dh <= 0) return;
+
+  ctx.drawImage(src, (dx / W) * srcW, (dy / H) * srcH, (dw / W) * srcW, (dh / H) * srcH, dx, dy, dw, dh);
+}
