@@ -1,0 +1,5 @@
+node_modules
+dist
+# fetched by `npm run setup` (large binaries) — must run before the demo
+public/wasm
+public/models
