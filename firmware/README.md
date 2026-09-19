@@ -45,6 +45,21 @@ Other limits that shaped the design: 48 KB Lua heap (96 opt-in), 512 widgets,
 no `os`/`io`/`coroutine`/`pcall`. Six LEDs at full white can brown out the
 board on AA power, so the beacon drives them at level 90.
 
+### Gotcha: this badge's Lua has 32-bit integers
+
+Confirmed on-device, and not mentioned in the official guide. Any **decimal**
+literal above `2147483647` is silently parsed as a *float*, and floats then
+fail every bitwise operator:
+
+```
+on_enter: main.lua:267: number (local 'h') has no integer representation
+```
+
+Write large constants in **hex** — `0x811C9DC5` instead of `2166136261`. A hex
+literal wraps to the same bit pattern as a genuine integer. Integer overflow
+wraps two's-complement (which is what FNV-1a wants anyway) and `>>` is a
+*logical* shift, so hashing still works on the resulting negative values.
+
 ---
 
 ## 2. Installing the app

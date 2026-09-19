@@ -274,7 +274,15 @@ local function derive_beacon_id()
 
   -- FNV-1a over the provisioned badge id, folded to 8 bits. The registry
   -- derives the same value, so the PDA seed and the beacon agree.
-  local h = 2166136261
+  --
+  -- The offset basis MUST be written in hex. This badge's Lua has 32-bit
+  -- integers, so the decimal literal 2166136261 exceeds INT_MAX and is
+  -- parsed as a float, which then fails every bitwise operator with
+  -- "number has no integer representation". The hex form wraps to the same
+  -- bit pattern as a genuine integer. Integer overflow in the multiply
+  -- wraps two's-complement, which is exactly what FNV-1a wants, and `>>`
+  -- is a logical shift, so the fold works on the negative value too.
+  local h = 0x811C9DC5
   for i = 1, #bid do
     h = (h ~ bid:byte(i)) & 0xFFFFFFFF
     h = (h * 16777619) & 0xFFFFFFFF
