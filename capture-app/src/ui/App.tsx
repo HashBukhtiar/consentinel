@@ -19,7 +19,10 @@ export function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [events, setEvents] = useState<FilmEvent[]>([]);
   const [source, setSource] = useState("—");
+  const [decoder, setDecoder] = useState<"stub" | "optical">("stub");
   const [error, setError] = useState("");
+
+  function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }
 
   useEffect(() => { listCameras().then(setCameras).catch(() => {}); }, [running]);
 
@@ -50,7 +53,7 @@ export function App() {
       const base = baseRef.current!;
       base.srcObject = cam;
       await base.play().catch(() => {});
-      flags.BEACON_DECODER = "optical";
+      setBeacon("optical");
       synthRef.current = startSynthetic(base);
       await startPipeline(synthRef.current.stream, null, "Synthetic badge · optical");
     } catch (e: any) { fail(e); }
@@ -64,7 +67,6 @@ export function App() {
       (el.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop());
       el.srcObject = null; el.removeAttribute("src");
     }
-    flags.BEACON_DECODER = "stub"; // restore safe default on stop
     setRunning(false); setTracks([]); setFps(0);
   }
 
@@ -85,6 +87,9 @@ export function App() {
         <button onClick={() => startCamera(deviceId || undefined).then((s) => begin(s, null, "Camera")).catch(fail)}>Use camera</button>
         <button onClick={() => startScreen().then((s) => begin(s, null, "Screen · WhatsApp")).catch(fail)}>Share screen (WhatsApp)</button>
         <button onClick={startSyntheticBadge}>Synthetic badge</button>
+        <button onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")} title="stub = fixed fake beacons · optical = decode the real badge">
+          beacon: {decoder}
+        </button>
         <label className="file">Load clip
           <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) begin(null, URL.createObjectURL(f), "Clip · fallback"); }} />
         </label>
