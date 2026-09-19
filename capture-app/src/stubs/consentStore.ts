@@ -9,8 +9,8 @@ type Listener = () => void;
 
 class ConsentStore {
   private map = new Map<string, ConsentState>([
-    ["A1B2", "opt_out"], // left person: not consenting → blurred
-    ["C3D4", "opt_in"], //  right person: consenting → clear
+    ["A1", "opt_out"], // left person: not consenting → blurred
+    ["C3", "opt_in"], //  right person: consenting → clear
   ]);
   private listeners = new Set<Listener>();
 
