@@ -47,7 +47,8 @@ export function detectWallet(): WalletProvider | null {
   return w.phantom?.solana ?? w.solana ?? w.solflare ?? w.backpack ?? null;
 }
 
-export function walletSigner(w: WalletProvider): TxSigner {
-  if (!w.publicKey) throw new Error("wallet not connected");
+/** null when the wallet is not (or no longer) connected — never throws, safe to call from render. */
+export function walletSigner(w: WalletProvider | null): TxSigner | null {
+  if (!w?.publicKey) return null;
   return { publicKey: w.publicKey, signTransaction: (tx) => w.signTransaction(tx) };
 }

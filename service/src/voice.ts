@@ -36,13 +36,19 @@ export class Voice {
       const file = join(config.AUDIO_DIR, createHash("sha1").update(config.ELEVENLABS_VOICE_ID + "|" + text).digest("hex") + ".mp3");
       let wasCached = existsSync(file);
       if (!wasCached) {
-        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${config.ELEVENLABS_VOICE_ID}?output_format=mp3_44100_128`, {
-          method: "POST",
-          headers: { "xi-api-key": config.ELEVENLABS_API_KEY, "content-type": "application/json", accept: "audio/mpeg" },
-          body: JSON.stringify({ text, model_id: config.ELEVENLABS_MODEL_ID, voice_settings: { stability: 0.4, similarity_boost: 0.8 } }),
-        });
-        if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0, 200)}`);
-        writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+        try {
+          const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${config.ELEVENLABS_VOICE_ID}?output_format=mp3_44100_128`, {
+            method: "POST",
+            headers: { "xi-api-key": config.ELEVENLABS_API_KEY, "content-type": "application/json", accept: "audio/mpeg" },
+            body: JSON.stringify({ text, model_id: config.ELEVENLABS_MODEL_ID, voice_settings: { stability: 0.4, similarity_boost: 0.8 } }),
+            signal: AbortSignal.timeout(6000), // venue Wi-Fi: never hang the alert path
+          });
+          if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0, 200)}`);
+          writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+        } catch (e) {
+          this.lastSpoke.set(key, cached); // roll back the debounce so the next capture retries
+          throw e;
+        }
       }
       if (config.PLAY_AUDIO_LOCALLY && process.platform === "darwin") execFile("afplay", [file], () => {});
       return { text, provider: "elevenlabs", audioUrl: `/audio/${file.split("/").pop()}`, cached: wasCached };

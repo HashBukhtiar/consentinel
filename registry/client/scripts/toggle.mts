@@ -1,11 +1,9 @@
 // On-stage backup for the live beat: flip a badge's consent from the CLI.
-//   npm run toggle -- A1B2 revoke            (owner-signed; deployer pays)
-//   npm run toggle -- A1B2 grant --delegated (badge signs the 33-byte message,
+//   npm run toggle -- A1B2 revoke            (owner-signed; deployer pays the fee)
+//   npm run toggle -- A1B2 grant --delegated (badge signs the 49-byte message,
 //                                             deployer relays; exercises the
 //                                             Ed25519-verified path)
 //   npm run toggle -- A1B2 close             (delete the record ⇒ fail-safe blur)
-import { PublicKey } from "@solana/web3.js";
-import { signConsentMessage } from "../src/registry";
 import { addr, badgeKeyPath, client, deployerKeypair, keypairSigner, loadKeypair, tx } from "./_env.mts";
 
 const [badgeId, action = "toggle"] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
@@ -19,16 +17,15 @@ const owner = keypairSigner(badge);
 
 const before = await reg.fetchConsent(badgeId);
 if (!before) throw new Error(`${badgeId} is not registered — run npm run seed`);
-console.log(`${badgeId} before: consent=${before.consent} rev=${before.revision} owner=${before.owner}`);
+console.log(`${badgeId} before: consent=${before.consent} rev=${before.revision} inst=${before.instance} owner=${before.owner}`);
 
 const target = action === "grant" ? true : action === "revoke" ? false : action === "toggle" ? !before.consent : null;
 const t0 = Date.now();
 let sig: string;
 if (action === "close") {
-  sig = await reg.closeConsent(owner, badgeId);
+  sig = await reg.closeConsent(owner, badgeId, deployer);
 } else if (delegated) {
-  const { signature } = signConsentMessage(badge.secretKey, badgeId, target!, before.revision);
-  sig = await reg.setConsentDelegated(deployer, badgeId, target!, before.revision, new PublicKey(before.owner), signature);
+  sig = await reg.setConsentAsBadge(deployer, badge.secretKey, badgeId, target!);
 } else {
   sig = await reg.setConsent(owner, badgeId, target!, deployer);
 }

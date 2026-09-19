@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Consentinel on-chain consent registry: Anchor program, tests, TS client, demo scripts",
   "scripts": {
-    "build": "anchor build --arch v0 && npm run sync-idl",
+    "build": "mkdir -p target/deploy && cp keys/program-keypair.json target/deploy/consent_registry-keypair.json && anchor build --arch v0 && node client/scripts/check-program-id.mjs && npm run sync-idl",
     "test": "anchor test",
     "sync-idl": "node client/scripts/sync-idl.mjs",
     "keys": "tsx client/scripts/keys.mts",

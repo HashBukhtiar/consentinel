@@ -10,12 +10,13 @@ const info = await conn.getAccountInfo(reg.programId);
 console.log(`deployed ${info ? "yes" : "NO — run anchor deploy"}`);
 console.log(`deployer ${deployer.publicKey.toBase58()}  ${((await conn.getBalance(deployer.publicKey)) / 1e9).toFixed(3)} SOL`);
 const snap = await reg.fetchAll();
+console.log(`registry ${snap.registry ? `issuer=${snap.registry.issuer} registrations=${snap.registry.registrations}` : "NOT INITIALIZED — run npm run seed"}`);
 console.log(`\nconsent records (${snap.consents.length}) @ slot ${snap.slot}`);
 for (const c of snap.consents)
-  console.log(`  ${c.badgeId}  ${c.consent ? "opt_in " : "opt_out"}  rev=${c.revision}  owner=${c.owner}  updated=${new Date(c.updatedAt * 1000).toLocaleTimeString()}`);
+  console.log(`  ${c.badgeId}  ${c.consent ? "opt_in " : "opt_out"}  rev=${c.revision}  inst=${c.instance}  owner=${c.owner}  updated=${new Date(c.updatedAt * 1000).toLocaleTimeString()}`);
 if (snap.overrides.length) {
   console.log(`\nevent overrides (${snap.overrides.length})`);
-  for (const o of snap.overrides) console.log(`  ${o.badgeId} @ ${o.eventId}  ${o.consent ? "opt_in" : "opt_out"}`);
+  for (const o of snap.overrides) console.log(`  ${o.badgeId} @ ${o.eventId}  ${o.consent ? "opt_in" : "opt_out"}  owner=${o.owner}`);
 }
 console.log(`\ncameras (${snap.cameras.length})`);
 for (const c of snap.cameras) console.log(`  ${c.label}  count=${c.count}  head=${c.head}  authority=${c.authority}`);

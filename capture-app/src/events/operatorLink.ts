@@ -7,9 +7,9 @@ import { flags } from "../config/flags";
 export type OperatorMessage =
   | { type: "health"; [k: string]: unknown }
   | { type: "film-event"; entry: { eventId: string; beaconId: string; seq: number; hash: string }; delivery: { delivered: number; queued: boolean } }
-  | { type: "alert"; beaconId: string; eventId: string; text: string; provider: string; audioUrl?: string; cached: boolean }
+  | { type: "alert"; beaconId: string; eventId: string; text: string; provider: string; audioUrl?: string; cached: boolean; playedLocally?: boolean }
   | { type: "alert-error"; beaconId: string; error: string }
-  | { type: "attested"; eventId: string; beaconId: string; signature: string; head: string; count: number; explorer: string }
+  | { type: "attested"; batch: number; eventIds: string[]; beaconIds: string[]; heartbeat: boolean; signature: string; head: string; count: number; explorer: string | null }
   | { type: "delegated"; signature: string; explorer: string; consent: boolean; revision: number };
 
 type Listener = (m: OperatorMessage) => void;
@@ -39,10 +39,10 @@ class OperatorLink {
       ws.onmessage = (ev) => {
         let m: OperatorMessage;
         try { m = JSON.parse(ev.data); } catch { return; }
-        if (m.type === "alert" && m.audioUrl && this.playAudio) {
-          // the service already plays locally when it runs on this laptop;
-          // playing here too covers the case where it runs elsewhere.
-          void new Audio(m.audioUrl).play().catch(() => {});
+        if (m.type === "alert" && m.audioUrl && this.playAudio && !m.playedLocally) {
+          // the service plays through the laptop speakers when it runs here;
+          // the browser plays only when the service says it did not.
+          void new Audio(this.serviceHttp(m.audioUrl)).play().catch(() => {});
         }
         this.listeners.forEach((l) => l(m));
       };
@@ -51,6 +51,11 @@ class OperatorLink {
     } catch {
       this.retry();
     }
+  }
+
+  /** Resolve a service-relative path against the configured service origin. */
+  serviceHttp(path: string): string {
+    try { return new URL(path, flags.SERVICE_WS_URL.replace(/^ws/, "http")).toString(); } catch { return path; }
   }
 
   private retry(): void {

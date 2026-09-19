@@ -19,15 +19,23 @@ if (existsSync(envFile)) {
 const env = (k: string, d = "") => process.env[k] ?? d;
 const bool = (k: string, d: boolean) => (process.env[k] === undefined ? d : /^(1|true|yes|on)$/i.test(process.env[k]!));
 const abs = (p: string) => (p.startsWith("~") ? join(homedir(), p.slice(1)) : resolve(SERVICE_DIR, p));
+const cluster = env("SOLANA_CLUSTER", "devnet") as "devnet" | "localnet" | "testnet" | "mainnet-beta";
 
 export const config = {
   PORT: Number(env("PORT", "8787")),
-  SOLANA_CLUSTER: env("SOLANA_CLUSTER", "devnet") as "devnet" | "localnet" | "testnet" | "mainnet-beta",
-  SOLANA_RPC_URL: env("SOLANA_RPC_URL", env("SOLANA_CLUSTER", "devnet") === "localnet" ? "http://127.0.0.1:8899" : "https://api.devnet.solana.com"),
+  /** Origin allowed to call the browser-facing routes (the capture app). Badges use non-browser clients. */
+  CORS_ORIGIN: env("CORS_ORIGIN", "http://localhost:5173"),
+  /** If set, required as `authorization: Bearer <token>` on POST /film-event and GET /audit/events. */
+  SERVICE_TOKEN: env("SERVICE_TOKEN"),
+  SOLANA_CLUSTER: cluster,
+  SOLANA_RPC_URL: env("SOLANA_RPC_URL", cluster === "localnet" ? "http://127.0.0.1:8899" : `https://api.${cluster}.solana.com`),
   CAMERA_KEYPAIR: abs(env("CAMERA_KEYPAIR", "../registry/keys/camera-cam-1.json")),
   CAMERA_ID: env("CAMERA_ID", "cam-1"),
-  RELAYER_KEYPAIR: abs(env("RELAYER_KEYPAIR", "~/.config/solana/id.json")),
+  RELAYER_KEYPAIR: abs(env("RELAYER_KEYPAIR", "../registry/keys/relayer.json")),
   ATTEST_ON_CHAIN: bool("ATTEST_ON_CHAIN", true),
+  /** One commitment per interval — a batch of the interval's film-events, or a heartbeat. Constant cadence ⇒ no timing leak. */
+  ATTEST_INTERVAL_MS: Number(env("ATTEST_INTERVAL_MS", "10000")),
+  ATTEST_HEARTBEAT: bool("ATTEST_HEARTBEAT", true),
   ELEVENLABS_API_KEY: env("ELEVENLABS_API_KEY"),
   ELEVENLABS_VOICE_ID: env("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
   ELEVENLABS_MODEL_ID: env("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
@@ -36,4 +44,15 @@ export const config = {
   AUDIO_DIR: join(SERVICE_DIR, "audio"),
   /** Debounce identical spoken alerts per badge (the capture app already debounces FilmEvents). */
   ALERT_MIN_INTERVAL_MS: Number(env("ALERT_MIN_INTERVAL_MS", "8000")),
+  MAX_PENDING_EVENTS: 500,
 };
+
+/** RPC URL with any query string (API keys live there) removed. */
+export function redactRpcUrl(u: string): string {
+  try {
+    const x = new URL(u);
+    return x.origin + x.pathname;
+  } catch {
+    return "(invalid url)";
+  }
+}

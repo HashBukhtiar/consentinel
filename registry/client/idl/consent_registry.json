@@ -10,14 +10,15 @@
     {
       "name": "attest_capture",
       "docs": [
-        "Commit one film-event to the camera's rolling hash chain:",
-        "`head = sha256(head || event_hash)`, `count += 1`.",
+        "Fold one commitment into the camera's rolling hash chain:",
+        "`head = sha256(head || commitment)`, `count += 1`.",
         "",
-        "Only a 32-byte hash of the off-chain `FilmEvent` record lands on-chain",
-        "(the record carries a random event id, so the hash is not guessable).",
-        "Anyone holding the off-chain log can recompute the chain and prove the",
-        "log is complete and unmodified; nobody can learn from the chain alone",
-        "who was filmed."
+        "The notify service submits one commitment per fixed interval: the hash",
+        "of that interval's film-event hashes, or a zero commitment when nothing",
+        "happened (\"heartbeat\"). So the chain carries a steady stream that",
+        "proves the off-chain log is complete and unmodified, while revealing",
+        "neither who was filmed nor *when* anyone was filmed. Film-event",
+        "records themselves (with a random event id) never leave the operator."
       ],
       "discriminator": [
         73,
@@ -63,7 +64,7 @@
       ],
       "args": [
         {
-          "name": "event_hash",
+          "name": "commitment",
           "type": {
             "array": [
               "u8",
@@ -76,7 +77,8 @@
     {
       "name": "clear_event_override",
       "docs": [
-        "Remove a per-event override; rent returns to the owner."
+        "Remove a per-event override; rent returns to its owner. Works even",
+        "after the consent record was closed (no orphaned rent)."
       ],
       "discriminator": [
         232,
@@ -90,65 +92,15 @@
       ],
       "accounts": [
         {
-          "name": "consent",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  115,
-                  101,
-                  110,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "consent.badge_id",
-                "account": "ConsentAccount"
-              }
-            ]
-          }
-        },
-        {
           "name": "event_override",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  118,
-                  101,
-                  114,
-                  114,
-                  105,
-                  100,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "consent.badge_id",
-                "account": "ConsentAccount"
-              },
-              {
-                "kind": "arg",
-                "path": "event_id"
-              }
-            ]
-          }
+          "writable": true
         },
         {
           "name": "owner",
           "writable": true,
           "signer": true,
           "relations": [
-            "consent"
+            "event_override"
           ]
         }
       ],
@@ -213,11 +165,66 @@
       "args": []
     },
     {
+      "name": "initialize",
+      "docs": [
+        "One-time setup: whoever pays becomes nothing; `issuer` is the organizer",
+        "key allowed to bind badge ids to owner keys."
+      ],
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "registry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "issuer",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "register",
       "docs": [
-        "Create the consent record for `badge_id`. `owner` becomes the only key",
-        "that can change it; `payer` funds rent (may be the same key, or an",
-        "organizer sponsoring badges that hold no SOL)."
+        "Issuer creates the consent record for `badge_id` and binds it to the",
+        "badge's key (`owner`). The issuer pays rent. From here on only `owner`",
+        "can change or delete the record."
       ],
       "discriminator": [
         211,
@@ -230,6 +237,27 @@
         240
       ],
       "accounts": [
+        {
+          "name": "registry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
         {
           "name": "consent",
           "writable": true,
@@ -257,17 +285,20 @@
         {
           "name": "owner",
           "docs": [
-            "The badge's key. Becomes the sole authority over this record."
-          ],
-          "signer": true
+            "The issuer vouches for the binding (it provisions the badge), so no",
+            "signature from the badge is needed at issuance."
+          ]
         },
         {
-          "name": "payer",
+          "name": "issuer",
           "docs": [
-            "Funds rent. Usually the owner; may be a sponsor."
+            "The organizer. Authorizes issuance and pays rent."
           ],
           "writable": true,
-          "signer": true
+          "signer": true,
+          "relations": [
+            "registry"
+          ]
         },
         {
           "name": "system_program",
@@ -404,11 +435,14 @@
         "",
         "The transaction must contain, immediately before this instruction, an",
         "Ed25519 native-program instruction verifying the owner's signature over",
-        "`consent_message(badge_id, consent, nonce)`. We introspect that",
-        "instruction via the Instructions sysvar and require that the verified",
-        "pubkey is the record's owner and the verified message is exactly the",
-        "one we expect. `nonce` must equal the record's current `revision`, so",
-        "every signed message is single-use (compare-and-swap ⇒ no replay)."
+        "`consent_message(badge_id, consent, nonce, instance, expires_at)`. We",
+        "introspect that instruction via the Instructions sysvar and require",
+        "that the verified pubkey is the record's owner and the verified message",
+        "is exactly the one we expect. Single-use and unforgeable by a relayer:",
+        "- `nonce` must equal the record's current `revision` (compare-and-swap);",
+        "- `instance` must equal the record's `instance`, so a signature made",
+        "for a previous registration of the same badge id can never replay;",
+        "- `expires_at` bounds how long a relayer can sit on a signed message."
       ],
       "discriminator": [
         146,
@@ -468,13 +502,19 @@
         {
           "name": "nonce",
           "type": "u64"
+        },
+        {
+          "name": "expires_at",
+          "type": "i64"
         }
       ]
     },
     {
       "name": "set_event_override",
       "docs": [
-        "Set (or update) a per-event override for this badge."
+        "Set (or update) a per-event override for this badge. The current badge",
+        "owner takes ownership of the override (also when overwriting a stale",
+        "one left by a previous owner)."
       ],
       "discriminator": [
         231,
@@ -513,33 +553,7 @@
         },
         {
           "name": "event_override",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  118,
-                  101,
-                  114,
-                  114,
-                  105,
-                  100,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "consent.badge_id",
-                "account": "ConsentAccount"
-              },
-              {
-                "kind": "arg",
-                "path": "event_id"
-              }
-            ]
-          }
+          "writable": true
         },
         {
           "name": "owner",
@@ -562,6 +576,55 @@
         {
           "name": "consent",
           "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_issuer",
+      "discriminator": [
+        122,
+        240,
+        209,
+        127,
+        179,
+        164,
+        175,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "registry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "issuer",
+          "signer": true,
+          "relations": [
+            "registry"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_issuer",
+          "type": "pubkey"
         }
       ]
     }
@@ -604,6 +667,19 @@
         50,
         117,
         61
+      ]
+    },
+    {
+      "name": "Registry",
+      "discriminator": [
+        47,
+        174,
+        110,
+        246,
+        184,
+        182,
+        252,
+        218
       ]
     }
   ],
@@ -665,7 +741,7 @@
     {
       "code": 6000,
       "name": "Unauthorized",
-      "msg": "Only the record owner may do this"
+      "msg": "Only the record owner (or the issuer, for issuance) may do this"
     },
     {
       "code": 6001,
@@ -694,21 +770,31 @@
     },
     {
       "code": 6006,
+      "name": "SignatureExpired",
+      "msg": "Signed message has expired"
+    },
+    {
+      "code": 6007,
+      "name": "SignatureTtlTooLong",
+      "msg": "Signed message validity exceeds the maximum TTL"
+    },
+    {
+      "code": 6008,
       "name": "EventIdTooLong",
       "msg": "event_id must be 1..=32 bytes"
     },
     {
-      "code": 6007,
+      "code": 6009,
       "name": "LabelTooLong",
       "msg": "label must be <= 32 bytes"
     },
     {
-      "code": 6008,
+      "code": 6010,
       "name": "Overflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6009,
+      "code": 6011,
       "name": "BadSysvar",
       "msg": "Expected the Instructions sysvar"
     }
@@ -733,7 +819,7 @@
           {
             "name": "head",
             "docs": [
-              "Rolling hash: `head_n = sha256(head_{n-1} || event_hash_n)`, `head_0 = 0`."
+              "Rolling hash: `head_n = sha256(head_{n-1} || commitment_n)`, `head_0 = 0`."
             ],
             "type": {
               "array": [
@@ -775,7 +861,7 @@
             "type": "u64"
           },
           {
-            "name": "event_hash",
+            "name": "commitment",
             "type": {
               "array": [
                 "u8",
@@ -831,7 +917,14 @@
           {
             "name": "revision",
             "docs": [
-              "Increments on every change; doubles as the nonce for delegated updates."
+              "Increments on every change; the nonce for delegated updates."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "instance",
+            "docs": [
+              "Unique per registration; binds delegated signatures to this record."
             ],
             "type": "u64"
           },
@@ -872,6 +965,10 @@
             "type": "u64"
           },
           {
+            "name": "instance",
+            "type": "u64"
+          },
+          {
             "name": "at",
             "type": "i64"
           },
@@ -905,7 +1002,7 @@
     {
       "name": "EventOverride",
       "docs": [
-        "Per-event override. PDA seeds: `[\"override\", badge_id u16 LE, event_id]`."
+        "Per-event override. PDA seeds: `[\"override\", badge_id u16 LE, sha256(event_id)]`."
       ],
       "type": {
         "kind": "struct",
@@ -913,6 +1010,13 @@
           {
             "name": "badge_id",
             "type": "u16"
+          },
+          {
+            "name": "owner",
+            "docs": [
+              "The badge owner who set it; may clear it even after `close_consent`."
+            ],
+            "type": "pubkey"
           },
           {
             "name": "event_id",
@@ -962,6 +1066,35 @@
           {
             "name": "at",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Registry",
+      "docs": [
+        "Singleton. PDA seeds: `[\"registry\"]`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "issuer",
+            "docs": [
+              "The organizer key allowed to bind badge ids to owner keys."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "registrations",
+            "docs": [
+              "Monotonic; gives every registration a unique `instance`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }

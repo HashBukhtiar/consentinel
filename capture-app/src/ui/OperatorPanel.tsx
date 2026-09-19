@@ -13,7 +13,7 @@ export function OperatorPanel({ fps, source, tracks, events }: {
 }) {
   const [, force] = useState(0);
   useEffect(() => consentStore.subscribe(() => force((x) => x + 1)), []);
-  const [svc, setSvc] = useState<Map<string, { alert?: string; provider?: string; attested?: { signature: string; explorer: string; count: number } }>>(new Map());
+  const [svc, setSvc] = useState<Map<string, { alert?: string; provider?: string; attested?: { signature: string; explorer: string | null; count: number } }>>(new Map());
   const [svcUp, setSvcUp] = useState(false);
   useEffect(() => {
     operatorLink.start();
@@ -22,7 +22,7 @@ export function OperatorPanel({ fps, source, tracks, events }: {
       setSvc((prev) => {
         const next = new Map(prev);
         if (m.type === "alert") next.set(m.eventId, { ...next.get(m.eventId), alert: m.text, provider: m.provider });
-        if (m.type === "attested") next.set(m.eventId, { ...next.get(m.eventId), attested: { signature: m.signature, explorer: m.explorer, count: m.count } });
+        if (m.type === "attested") for (const id of m.eventIds) next.set(id, { ...next.get(id), attested: { signature: m.signature, explorer: m.explorer, count: m.count } });
         return next;
       });
     });
@@ -76,7 +76,9 @@ export function OperatorPanel({ fps, source, tracks, events }: {
           <div className="event" key={e.eventId}>
             <div>📳 {e.beaconId}
               {s?.alert && <span className="muted" title={s.alert}> · 🔊 {s.provider}</span>}
-              {s?.attested && <a href={s.attested.explorer} target="_blank" rel="noreferrer" title={`capture #${s.attested.count} anchored`}> · ⛓ #{s.attested.count} ↗</a>}
+              {s?.attested && (s.attested.explorer
+                ? <a href={s.attested.explorer} target="_blank" rel="noreferrer" title={`anchored in commitment #${s.attested.count}`}> · ⛓ #{s.attested.count} ↗</a>
+                : <span className="muted" title="anchored (confirmed from on-chain state)"> · ⛓ #{s.attested.count}</span>)}
             </div>
             <span>{new Date(e.at).toLocaleTimeString()}</span>
           </div>

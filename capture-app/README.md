@@ -1,4 +1,4 @@
-# Consentinel — capture app (vertical B)
+# Consentinel — capture app
 
 The CV core + demo surface. Camera → detect faces → decode beacons → associate
 beacon↔face → **blur anyone not explicitly opted in** → emit film-events.
@@ -10,8 +10,20 @@ Near-real-time, fail-safe (blur on any uncertainty), no face database.
 npm install
 npm run setup   # fetch MediaPipe wasm + model into public/ (needs net ONCE; run before the venue)
 npm run dev     # http://localhost:5173
-npm test        # self-check: tracker, association, fail-safe blur
+npm test        # self-check: tracker, association, fail-safe blur, chain-cache semantics
+npm run typecheck
 ```
+
+Consent comes from **Solana** by default (see the root README, "Part C"):
+
+```bash
+cd ../registry && npm run seed     # registers the demo badges; writes public/demo/badges.json (devnet demo keys)
+cd ../service && npm run dev       # notify + audit service (buzz, voice, on-chain attestations)
+```
+
+Localnet instead of devnet: put `VITE_SOLANA_CLUSTER=localnet` in `.env.local`
+(the RPC URL follows). No network at all: `VITE_CONSENT_SOURCE=stub` keeps the
+in-memory toggles.
 
 **Stop:** `Ctrl+C` in the terminal running `npm run dev`. If it got orphaned in the
 background (no terminal to interrupt), kill it by port:
@@ -21,20 +33,22 @@ lsof -ti :5173 | xargs kill
 ```
 
 Pick **Use camera** (webcam), **Share screen (WhatsApp)** for the glasses feed
-mirrored in a window, or **Load clip** for `DEMO_FALLBACK_MODE`. Toggle a
-beacon's consent in the operator panel to see a face blur/clear live.
+mirrored in a window, or **Load clip** for `DEMO_FALLBACK_MODE`. In the
+operator panel, **grant / revoke / close** send a real transaction; the face
+blurs or clears when the websocket push lands (~1 s), always within the 3 s
+poll.
 
-## The two integration seams (owned by teammates)
+## Integration seams
 
-Both are stubbed in `src/stubs/` so the whole pipeline runs today. The contracts
-live in [`src/shared/schema.ts`](src/shared/schema.ts):
+Contracts live in [`src/shared/schema.ts`](src/shared/schema.ts):
 
 - **A → `DecodeBeacons`**: `(frame: ImageData, tMs) => BeaconReading[]`, coords
-  normalized [0,1]. Replace `src/stubs/decodeBeacons.ts`.
-- **C → `GetConsent`**: `(beaconId) => "opt_in" | "opt_out" | "unknown"`,
-  a *synchronous* read of the chain-synced cache. Replace `src/stubs/consentStore.ts`.
-- **C ← `FilmEvent`**: set `FILM_EVENT_ENDPOINT` in `src/config/flags.ts` to C's
-  notify service; the app POSTs opted-out captures there (fire-and-forget).
+  normalized [0,1]. Still stubbed in `src/stubs/decodeBeacons.ts`.
+- **C → `GetConsent`**: wired. `src/consent/store.ts` picks
+  `ChainConsentCache` (Solana-synced, slot-ordered, staleness fail-safe) or the
+  stub off `CONSENT_SOURCE`. The loop only ever does a synchronous Map read.
+- **C ← `FilmEvent`**: wired. `FILM_EVENT_ENDPOINT` defaults to the service;
+  `VITE_SERVICE_TOKEN` must match the service's `SERVICE_TOKEN` if set.
 
 ## Layout
 
@@ -45,11 +59,16 @@ src/vision/track.ts          IOU tracker → stable trackId, persists blur on oc
 src/vision/associate.ts      beacon → nearest face above, sticky on the track
 src/vision/blur.ts           canvas-2D pixelation
 src/consent/decide.ts        fail-safe: clear only on opt_in
+src/consent/chainCache.ts    local cache synced from Solana (ws push + poll; unknown/stale ⇒ blur)
+src/consent/store.ts         chain vs stub selection
+src/consent/signers.ts       demo badge keys (devnet) + injected wallet
 src/events/filmEvent.ts      debounced, fire-and-forget FilmEvent emit
+src/events/operatorLink.ts   feed from the notify service (alerts, attestations)
 src/pipeline/loop.ts         the hot loop (never awaits network/chain)
-src/ui/                      operator panel + live consent controls (demo surface)
+src/ui/                      operator panel + ChainPanel (the on-stage beat)
 src/config/flags.ts          §10 flags + perf knobs
 ```
 
 Tuning knobs in `flags.ts`: `PROCESS_WIDTH` (speed), `PIXELATE_SIZE`,
-`TRACK_MAX_MISSED` (occlusion hold), `BLUR_PAD`.
+`TRACK_MAX_MISSED` (occlusion hold), `BLUR_PAD`, `CONSENT_CACHE_SYNC_MS`,
+`CONSENT_STALE_MS`.

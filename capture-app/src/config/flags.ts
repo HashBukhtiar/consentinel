@@ -2,6 +2,7 @@
 // everything else off. Tune the beacon/perf knobs for your camera at the venue.
 // Override any VITE_* value with a capture-app/.env.local file.
 const env = ((import.meta as any).env ?? {}) as Record<string, string | undefined>;
+const cluster = (env.VITE_SOLANA_CLUSTER ?? "devnet") as "devnet" | "localnet";
 
 export const flags = {
   DEFAULT_CONSENT: "blur" as const, // fail-safe: unknown/undecoded ⇒ blur
@@ -11,11 +12,15 @@ export const flags = {
   // "chain": read consent from the devnet-synced cache (the real thing).
   // "stub":  in-memory toggles, zero network — for a dead-Wi-Fi fallback only.
   CONSENT_SOURCE: (env.VITE_CONSENT_SOURCE ?? "chain") as "chain" | "stub",
-  SOLANA_CLUSTER: (env.VITE_SOLANA_CLUSTER ?? "devnet") as "devnet" | "localnet",
-  SOLANA_RPC_URL: env.VITE_SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
+  SOLANA_CLUSTER: cluster,
+  SOLANA_RPC_URL: env.VITE_SOLANA_RPC_URL ?? (cluster === "localnet" ? "http://127.0.0.1:8899" : "https://api.devnet.solana.com"),
   CONSENT_CACHE_SYNC_MS: 3000, // poll backstop; websocket pushes land faster
+  // If neither a poll nor a push succeeded within this window the cache is
+  // no longer authoritative: every beacon reads as "unknown" ⇒ blur (fail-safe).
+  CONSENT_STALE_MS: 60_000,
   EVENT_ID: env.VITE_EVENT_ID ?? "htn2026-demo", // scope for per-event overrides
   FILM_EVENT_ENDPOINT: env.VITE_FILM_EVENT_ENDPOINT ?? "http://localhost:8787/film-event", // "" ⇒ local log only
+  SERVICE_TOKEN: env.VITE_SERVICE_TOKEN ?? "", // must match the service's SERVICE_TOKEN when set
   SERVICE_WS_URL: env.VITE_SERVICE_WS_URL ?? "ws://localhost:8787/operator", // alerts + attestations feed
   FILM_EVENT_DEBOUNCE_MS: 5000,
 
