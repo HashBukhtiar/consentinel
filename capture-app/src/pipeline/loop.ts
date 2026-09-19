@@ -9,6 +9,7 @@ import { decodeBeacons as stubDecode } from "../stubs/decodeBeacons";
 import { decodeBeacons as opticalDecode } from "../decode/beacon";
 import { consentStore } from "../stubs/consentStore";
 import { flags } from "../config/flags";
+import { obsEnabled, traceFrame, traceStage, logConsent } from "../obs/sentry";
 import type { FilmEvent, Track } from "../shared/schema";
 
 // stub (fixed beacons) vs optical (real decode) — read live so a UI/source can
@@ -31,6 +32,8 @@ export class Pipeline {
   private lastT = 0;
   private fps = 0;
   private tick = 0;
+  private frameN = 0;
+  private lastLogged = new Map<string, string>(); // trackId → last-logged decision
 
   constructor(
     private video: HTMLVideoElement,
@@ -72,20 +75,30 @@ export class Pipeline {
     pctx.drawImage(v, 0, 0, procW, procH);
 
     const tMs = performance.now();
-    const faces = detectFaces(this.detector, this.detectCanvas, tMs); // normalized
-    const tracks = this.tracker.update(faces);
+    // trace ~once/sec: a span tree over the stages, never every frame (120fps)
+    const doTrace = obsEnabled() && this.frameN++ % 60 === 0;
 
-    const frame = pctx.getImageData(0, 0, procW, procH); // A's decoder reads this
-    associate(tracks, decodeBeacons(frame, tMs));
-    decide(tracks, consentStore.get);
+    const runStages = (): Track[] => {
+      const faces = traceStage("detect", () => detectFaces(this.detector, this.detectCanvas, tMs));
+      const tracks = traceStage("track", () => this.tracker.update(faces));
+      const imageData = pctx.getImageData(0, 0, procW, procH); // A's decoder reads this
+      const beacons = traceStage("decode", () => decodeBeacons(imageData, tMs));
+      traceStage("associate", () => associate(tracks, beacons));
+      traceStage("decide", () => decide(tracks, consentStore.get));
+      traceStage("blur+notify", () => {
+        for (const t of tracks) {
+          if (t.blurred) {
+            const px = clampBox(t.bbox, dispW, dispH, flags.BLUR_PAD);
+            pixelate(dctx, px.x, px.y, px.w, px.h, flags.PIXELATE_SIZE);
+          }
+          if (t.beaconId && t.consent === "opt_out") this.emitter.maybeEmit(t.beaconId);
+        }
+      });
+      return tracks;
+    };
 
-    for (const t of tracks) {
-      if (t.blurred) {
-        const px = clampBox(t.bbox, dispW, dispH, flags.BLUR_PAD);
-        pixelate(dctx, px.x, px.y, px.w, px.h, flags.PIXELATE_SIZE);
-      }
-      if (t.beaconId && t.consent === "opt_out") this.emitter.maybeEmit(t.beaconId);
-    }
+    const tracks = doTrace ? traceFrame(runStages) : runStages();
+    this.logDecisions(tracks);
 
     const now = performance.now();
     const dt = now - this.lastT; this.lastT = now;
@@ -94,6 +107,22 @@ export class Pipeline {
       this.onState({ fps: Math.round(this.fps), tracks: tracks.map((t) => ({ ...t })) });
     }
   };
+
+  // Log a consent decision only when a track's outcome changes — meaningful,
+  // low-volume (not once per frame). Cleans up entries for dropped tracks.
+  private logDecisions(tracks: Track[]): void {
+    if (!obsEnabled()) return;
+    const live = new Set<string>();
+    for (const t of tracks) {
+      live.add(t.trackId);
+      const key = `${t.beaconId ?? "-"}:${t.consent}:${t.blurred}`;
+      if (this.lastLogged.get(t.trackId) !== key) {
+        logConsent(t.trackId, t.beaconId, t.consent, t.blurred);
+        this.lastLogged.set(t.trackId, key);
+      }
+    }
+    for (const id of [...this.lastLogged.keys()]) if (!live.has(id)) this.lastLogged.delete(id);
+  }
 }
 
 // normalized bbox → padded, clamped device-px box

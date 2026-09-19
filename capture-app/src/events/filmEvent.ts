@@ -1,5 +1,6 @@
 import type { FilmEvent } from "../shared/schema";
 import { flags } from "../config/flags";
+import { logFilmEvent } from "../obs/sentry";
 
 // Emits a FilmEvent when an opted-out person is on camera. Fire-and-forget:
 // never awaited in the render loop. Debounced per beacon so one capture doesn't
@@ -18,6 +19,7 @@ export class FilmEmitter {
     this.last.set(beaconId, now);
     const e: FilmEvent = { eventId: crypto.randomUUID(), beaconId, at: now, cameraId: this.cameraId };
     this.onEvent(e);
+    logFilmEvent(beaconId);
     if (flags.FILM_EVENT_ENDPOINT) {
       fetch(flags.FILM_EVENT_ENDPOINT, {
         method: "POST",

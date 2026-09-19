@@ -24,6 +24,22 @@ Pick **Use camera** (webcam), **Share screen (WhatsApp)** for the glasses feed
 mirrored in a window, or **Load clip** for `DEMO_FALLBACK_MODE`. Toggle a
 beacon's consent in the operator panel to see a face blur/clear live.
 
+## Observability (Sentry)
+
+Two products beyond error monitoring, per the track: **Tracing** (a span tree
+`detect → track → decode → associate → decide → blur+notify`, sampled ~1 frame/s
+so the 120fps loop is never touched) and **Logs** (structured consent decisions,
+logged on change, + film events). **Session Replay is deliberately omitted** — it
+would record faces from the video feed, the exact thing the app refuses to do.
+
+Off by default; activate by adding your DSN (Sentry then bundles + turns on):
+
+```bash
+cp .env.example .env.local   # then set VITE_SENTRY_DSN=…
+```
+
+Instrumentation lives in `src/obs/sentry.ts`; no-ops with no DSN.
+
 ## The two integration seams (owned by teammates)
 
 Both are stubbed in `src/stubs/` so the whole pipeline runs today. The contracts

@@ -38,12 +38,20 @@ export function OperatorPanel({ fps, source, tracks, events }: {
       </table>
 
       <h3>Consent <span className="muted">stub → Solana cache</span></h3>
-      {consentStore.all().map(([id, c]) => (
-        <div className="row" key={id}>
-          <span>{id}</span>
-          <button className={"toggle " + c} onClick={() => consentStore.toggle(id)}>{c}</button>
-        </div>
-      ))}
+      {(() => {
+        const stored = consentStore.all().map(([id]) => id);
+        const seen = tracks.map((t) => t.beaconId).filter((x): x is string => !!x);
+        const ids = [...new Set([...stored, ...seen])];
+        return ids.map((id) => {
+          const c = consentStore.get(id); // "unknown" if a freshly-decoded badge
+          return (
+            <div className="row" key={id}>
+              <span>{id}{!stored.includes(id) && <em className="muted"> · new</em>}</span>
+              <button className={"toggle " + c} onClick={() => consentStore.toggle(id)}>{c}</button>
+            </div>
+          );
+        });
+      })()}
 
       <h3>Film events <span className="muted">→ badge buzz + ElevenLabs</span></h3>
       {events.map((e) => (

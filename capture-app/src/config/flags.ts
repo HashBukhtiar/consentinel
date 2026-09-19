@@ -22,13 +22,13 @@ export const flags = {
   BEACON_MIN_W: 22, // min patch width in px at PROCESS_WIDTH
   BEACON_CELL_LIT_FRAC: 0.5, // cell lit if lum > frac × borderLum
   BEACON_CONTRAST_FRAC: 0.12, // min |cellLum − threshold| / borderLum to trust the read
-  BEACON_MATCH_PX: 44, // patch-tracking match radius across frames
+  BEACON_MATCH_PX: 64, // patch-tracking match radius across frames (scales with PROCESS_WIDTH)
   BEACON_TRACK_MISS: 20, // keep a patch's assembler alive this many frames across gaps
   BEACON_ID_HOLD_MS: 2000, // report last decoded id this long after a decode (decodes are ~0.5-1s apart)
   BEACON_CONFIRM_MS: 1500, // an id must decode twice within this window to be trusted
 
   // vision/perf (mine)
-  PROCESS_WIDTH: 480, // detection input width; smaller = faster
+  PROCESS_WIDTH: 720, // detection + decode input width; higher = badges decode from farther (costs CPU)
   DISPLAY_MAX_WIDTH: 960, // composited output width cap
   IOU_MATCH: 0.3, // tracker match threshold
   TRACK_MAX_MISSED: 10, // frames to hold a blur through occlusion (~0.6s @15fps)
