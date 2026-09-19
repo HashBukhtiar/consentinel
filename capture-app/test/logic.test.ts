@@ -29,3 +29,63 @@ assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, false, "opt_in ⇒ 
 assert.equal(tracks.find((t) => t.trackId === "L")!.blurred, true, "no beacon ⇒ blur");
 
 console.log("ok — tracker identity, association, fail-safe blur");
+
+// 4) chain cache semantics (no network: autoFetch off, synthetic snapshots)
+import { ChainConsentCache } from "../src/consent/chainCache";
+import { flags } from "../src/config/flags";
+let clock = 1_000_000;
+const cache = new ChainConsentCache("http://127.0.0.1:8899", { autoFetch: false, cluster: "localnet", now: () => clock });
+const rec = (badgeId: string, consent: boolean, revision: number, owner = "o") => ({
+  badgeId, badgeIdNum: parseInt(badgeId, 16), owner, consent, revision, instance: 1, createdAt: 1, updatedAt: 1, address: "a",
+});
+const snap = (consents: any[], slot: number, overrides: any[] = []) => ({ registry: null, consents, overrides, cameras: [], slot });
+assert.equal(cache.get("A1B2"), "unknown", "empty cache ⇒ unknown ⇒ blur");
+cache.applySnapshot(snap([rec("A1B2", false, 0), rec("C3D4", true, 0)], 100));
+cache.status.freshAt = clock; // applySnapshot alone doesn't stamp freshness; syncNow does
+assert.equal(cache.get("a1b2"), "opt_out", "case-insensitive id, opt_out");
+assert.equal(cache.get("C3D4"), "opt_in");
+assert.equal(cache.get("ZZZZ"), "unknown", "garbage id ⇒ unknown");
+assert.equal(cache.get("E5F6"), "unknown", "unregistered ⇒ unknown ⇒ blur");
+// push: newer slot wins
+cache.applyLogs({ signature: "s", slot: 101, err: null, events: [{ name: "ConsentChanged", badgeId: "A1B2", owner: "o", consent: true, revision: 1, instance: 1, at: 2, delegated: true }] });
+assert.equal(cache.get("A1B2"), "opt_in", "ws push applied");
+// stale poll (older slot) must not revert the push
+cache.applySnapshot(snap([rec("A1B2", false, 0), rec("C3D4", true, 0)], 100));
+assert.equal(cache.get("A1B2"), "opt_in", "stale snapshot ignored");
+// failed tx logs are ignored
+cache.applyLogs({ signature: "s2", slot: 102, err: { x: 1 }, events: [{ name: "ConsentChanged", badgeId: "A1B2", owner: "o", consent: false, revision: 2, instance: 1, at: 3, delegated: false }] });
+assert.equal(cache.get("A1B2"), "opt_in", "failed tx ignored");
+// per-event override takes precedence for the configured EVENT_ID — but only from the record's current owner
+cache.applyLogs({ signature: "s3", slot: 103, err: null, events: [{ name: "EventOverrideChanged", badgeId: "A1B2", owner: "someone-else", eventId: flags.EVENT_ID, consent: false, at: 4 }] });
+assert.equal(cache.get("A1B2"), "opt_in", "override from a previous owner is ignored");
+cache.applyLogs({ signature: "s3b", slot: 103, err: null, events: [{ name: "EventOverrideChanged", badgeId: "A1B2", owner: "o", eventId: flags.EVENT_ID, consent: false, at: 4 }] });
+assert.equal(cache.get("A1B2"), "opt_out", "event override wins");
+cache.applyLogs({ signature: "s4", slot: 104, err: null, events: [{ name: "EventOverrideChanged", badgeId: "A1B2", owner: "o", eventId: flags.EVENT_ID, consent: null, at: 5 }] });
+assert.equal(cache.get("A1B2"), "opt_in", "override cleared ⇒ base consent");
+// close ⇒ record gone ⇒ unknown ⇒ blur; a stale snapshot can't resurrect it
+cache.applyLogs({ signature: "s5", slot: 105, err: null, events: [{ name: "ConsentClosed", badgeId: "A1B2", owner: "o", at: 6 }] });
+assert.equal(cache.get("A1B2"), "unknown", "closed ⇒ unknown ⇒ blur");
+cache.applySnapshot(snap([rec("A1B2", true, 1), rec("C3D4", true, 0)], 104));
+assert.equal(cache.get("A1B2"), "unknown", "tombstone beats stale snapshot");
+cache.applySnapshot(snap([rec("A1B2", true, 2), rec("C3D4", true, 0)], 106));
+assert.equal(cache.get("A1B2"), "opt_in", "re-registration in a newer snapshot is applied");
+cache.applySnapshot(snap([rec("A1B2", true, 2)], 107));
+assert.equal(cache.get("C3D4"), "unknown", "a record missing from a newer full snapshot is dropped");
+cache.applySnapshot(snap([rec("A1B2", true, 2), rec("C3D4", true, 0)], 108));
+// staleness fail-safe: no sync for CONSENT_STALE_MS ⇒ everything unknown ⇒ blur; a sync restores it
+clock += flags.CONSENT_STALE_MS + 1;
+assert.equal(cache.get("A1B2"), "unknown", "stale cache ⇒ unknown ⇒ blur");
+assert.equal(cache.get("C3D4"), "unknown", "stale cache ⇒ unknown ⇒ blur (opt_in too)");
+cache.applyLogs({ signature: "s6", slot: 107, err: null, events: [] });
+assert.equal(cache.get("C3D4"), "opt_in", "a fresh push restores authority");
+
+console.log("ok — chain cache: fail-safe unknown, slot ordering, owner-checked overrides, tombstones, staleness");
+
+// 5) stub fallback normalizes beacon ids like the chain cache does
+import { consentStore } from "../src/stubs/consentStore";
+assert.equal(consentStore.get("4e"), "opt_out", "stub: case-insensitive");
+assert.equal(consentStore.get("c3"), "opt_in");
+assert.equal(consentStore.get("zz"), "unknown", "stub: garbage ⇒ unknown ⇒ blur");
+consentStore.set("00ab", "opt_in");
+assert.equal(consentStore.get("AB"), "opt_in", "stub: zero-padding");
+console.log("ok — stub store normalization");

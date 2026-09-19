@@ -1,4 +1,5 @@
 import type { Consent, ConsentState, GetConsent } from "../shared/schema";
+import { normalizeBadgeId } from "../../../registry/client/src/core";
 
 // THROWAWAY stub for C's consent cache. Same read shape as the real cache
 // (synchronous getConsent), plus toggles so the operator panel can drive the
@@ -15,8 +16,9 @@ class ConsentStore {
   ]);
   private listeners = new Set<Listener>();
 
-  get: GetConsent = (id) => (this.map.get(id) as Consent) ?? "unknown";
-  set(id: string, c: ConsentState) { this.map.set(id, c); this.emit(); }
+  private key(id: string): string | null { try { return normalizeBadgeId(id); } catch { return null; } }
+  get: GetConsent = (id) => { const k = this.key(id); return k ? ((this.map.get(k) as Consent) ?? "unknown") : "unknown"; };
+  set(id: string, c: ConsentState) { const k = this.key(id); if (k) { this.map.set(k, c); this.emit(); } }
   toggle(id: string) { this.set(id, this.get(id) === "opt_in" ? "opt_out" : "opt_in"); }
   all(): [string, ConsentState][] { return [...this.map.entries()]; }
 

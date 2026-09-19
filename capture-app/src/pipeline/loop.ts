@@ -7,7 +7,7 @@ import { decide } from "../consent/decide";
 import { FilmEmitter } from "../events/filmEvent";
 import { decodeBeacons as stubDecode } from "../stubs/decodeBeacons";
 import { decodeBeacons as opticalDecode } from "../decode/beacon";
-import { consentStore } from "../stubs/consentStore";
+import { getConsent } from "../consent/store";
 import { flags } from "../config/flags";
 import { obsEnabled, traceFrame, traceStage, logConsent } from "../obs/sentry";
 import type { FilmEvent, Track } from "../shared/schema";
@@ -84,7 +84,7 @@ export class Pipeline {
       const imageData = pctx.getImageData(0, 0, procW, procH); // A's decoder reads this
       const beacons = traceStage("decode", () => decodeBeacons(imageData, tMs));
       traceStage("associate", () => associate(tracks, beacons));
-      traceStage("decide", () => decide(tracks, consentStore.get));
+      traceStage("decide", () => decide(tracks, getConsent)); // sync read of the Solana-synced cache
       traceStage("blur+notify", () => {
         for (const t of tracks) {
           if (t.blurred) {

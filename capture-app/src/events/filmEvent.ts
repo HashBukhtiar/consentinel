@@ -23,7 +23,7 @@ export class FilmEmitter {
     if (flags.FILM_EVENT_ENDPOINT) {
       fetch(flags.FILM_EVENT_ENDPOINT, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...(flags.SERVICE_TOKEN ? { authorization: `Bearer ${flags.SERVICE_TOKEN}` } : {}) },
         body: JSON.stringify(e),
       }).catch(() => {}); // never let a network error touch the loop
     }

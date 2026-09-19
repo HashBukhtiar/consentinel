@@ -1,0 +1,67 @@
+// Feed from the notify service (alerts spoken via ElevenLabs, on-chain
+// attestations of film-events). Optional: if the service isn't running the
+// app just doesn't get the extras. Reconnects with backoff. Never touches
+// the render loop.
+import { flags } from "../config/flags";
+
+export type OperatorMessage =
+  | { type: "health"; [k: string]: unknown }
+  | { type: "film-event"; entry: { eventId: string; beaconId: string; seq: number; hash: string }; delivery: { delivered: number; queued: boolean } }
+  | { type: "alert"; beaconId: string; eventId: string; text: string; provider: string; audioUrl?: string; cached: boolean; playedLocally?: boolean }
+  | { type: "alert-error"; beaconId: string; error: string }
+  | { type: "attested"; batch: number; eventIds: string[]; beaconIds: string[]; heartbeat: boolean; signature: string; head: string; count: number; explorer: string | null }
+  | { type: "delegated"; signature: string; explorer: string; consent: boolean; revision: number };
+
+type Listener = (m: OperatorMessage) => void;
+
+class OperatorLink {
+  private ws: WebSocket | null = null;
+  private listeners = new Set<Listener>();
+  private backoff = 1000;
+  connected = false;
+  playAudio = true;
+
+  start(): void {
+    if (!flags.SERVICE_WS_URL || this.ws) return;
+    this.open();
+  }
+
+  subscribe(l: Listener): () => void {
+    this.listeners.add(l);
+    return () => { this.listeners.delete(l); };
+  }
+
+  private open(): void {
+    try {
+      const ws = new WebSocket(flags.SERVICE_WS_URL);
+      this.ws = ws;
+      ws.onopen = () => { this.connected = true; this.backoff = 1000; };
+      ws.onmessage = (ev) => {
+        let m: OperatorMessage;
+        try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.type === "alert" && m.audioUrl && this.playAudio && !m.playedLocally) {
+          // the service plays through the laptop speakers when it runs here;
+          // the browser plays only when the service says it did not.
+          void new Audio(this.serviceHttp(m.audioUrl)).play().catch(() => {});
+        }
+        this.listeners.forEach((l) => l(m));
+      };
+      ws.onclose = () => { this.connected = false; this.ws = null; this.retry(); };
+      ws.onerror = () => { ws.close(); };
+    } catch {
+      this.retry();
+    }
+  }
+
+  /** Resolve a service-relative path against the configured service origin. */
+  serviceHttp(path: string): string {
+    try { return new URL(path, flags.SERVICE_WS_URL.replace(/^ws/, "http")).toString(); } catch { return path; }
+  }
+
+  private retry(): void {
+    setTimeout(() => this.open(), this.backoff);
+    this.backoff = Math.min(this.backoff * 2, 15_000);
+  }
+}
+
+export const operatorLink = new OperatorLink();

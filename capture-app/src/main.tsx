@@ -1,3 +1,4 @@
+import "./polyfills";
 import { createRoot } from "react-dom/client";
 import { initSentry } from "./obs/sentry";
 import { App } from "./ui/App";

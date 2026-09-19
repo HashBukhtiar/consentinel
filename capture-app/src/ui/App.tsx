@@ -4,6 +4,7 @@ import { listCameras, startCamera, startScreen } from "../sources/videoSource";
 import { startSynthetic, SyntheticHandle } from "../sources/synthetic";
 import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
+import { chain, startConsent } from "../consent/store";
 import type { FilmEvent, Track } from "../shared/schema";
 
 export function App() {
@@ -25,6 +26,7 @@ export function App() {
   function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }
 
   useEffect(() => { listCameras().then(setCameras).catch(() => {}); }, [running]);
+  useEffect(() => { startConsent(); }, []); // chain cache runs from page load, independent of the camera
 
   async function startPipeline(stream: MediaStream | null, fileUrl: string | null, label: string) {
     setError("");
@@ -77,6 +79,7 @@ export function App() {
       <header>
         <h1>Consentinel <span>capture</span></h1>
         <div className="tag">fail-safe: blur unless opt-in</div>
+        {chain && <div className="tag chain" title={chain.status.programId}>consent: Solana {chain.status.cluster}</div>}
       </header>
 
       <div className="controls">
