@@ -5,10 +5,16 @@ import { associate } from "../vision/associate";
 import { pixelate } from "../vision/blur";
 import { decide } from "../consent/decide";
 import { FilmEmitter } from "../events/filmEvent";
-import { decodeBeacons } from "../stubs/decodeBeacons";
+import { decodeBeacons as stubDecode } from "../stubs/decodeBeacons";
+import { decodeBeacons as opticalDecode } from "../decode/beacon";
 import { consentStore } from "../stubs/consentStore";
 import { flags } from "../config/flags";
 import type { FilmEvent, Track } from "../shared/schema";
+
+// stub (fixed beacons) vs optical (real decode) — read live so a UI/source can
+// flip flags.BEACON_DECODER at runtime (e.g. synthetic-badge mode).
+const decodeBeacons = (frame: ImageData, tMs: number) =>
+  (flags.BEACON_DECODER === "optical" ? opticalDecode : stubDecode)(frame, tMs);
 
 export interface PipelineState { fps: number; tracks: Track[] }
 
