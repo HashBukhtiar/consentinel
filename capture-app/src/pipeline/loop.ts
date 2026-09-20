@@ -3,7 +3,7 @@ import { createDetector, detectFaces, type RawFace } from "../vision/detect";
 import { RemoteVision } from "../vision/remote";
 import { Tracker } from "../vision/track";
 import { associate } from "../vision/associate";
-import { pixelate, pixelateAll, clearWindow } from "../vision/blur";
+import { pixelateAll, clearWindow, coverFace } from "../vision/blur";
 import { decide } from "../consent/decide";
 import { FilmEmitter } from "../events/filmEvent";
 import { consentRequester } from "../events/consentRequest";
@@ -192,7 +192,7 @@ export class Pipeline {
           for (const t of tracks) {
             if (!t.blurred) continue;
             const px = clampBox(t.bbox, dispW, dispH, flags.BLUR_PAD);
-            pixelate(dctx, px.x, px.y, px.w, px.h, flags.PIXELATE_SIZE);
+            coverFace(dctx, px.x, px.y, px.w, px.h, flags.MASK, flags.PIXELATE_SIZE);
           }
         }
         for (const t of tracks) if (t.beaconId && t.consent === "opt_out") this.emitter.maybeEmit(t.beaconId);

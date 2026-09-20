@@ -51,3 +51,27 @@ export function clearWindow(
 
   ctx.drawImage(src, (dx / W) * srcW, (dy / H) * srcH, (dw / W) * srcW, (dh / H) * srcH, dx, dy, dw, dh);
 }
+
+// ---- icon mask (demo feature) ----------------------------------------------
+// An image the operator dropped on the feed stands in for the pixelation. It is
+// drawn object-fit:cover inside the SAME padded box the blur would use, clipped
+// to it, so coverage is identical — the icon can never reveal less than a blur.
+let mask: HTMLImageElement | null = null;
+export function setMaskImage(img: HTMLImageElement | null): void { mask = img; }
+export function hasMaskImage(): boolean { return !!mask && mask.complete && mask.naturalWidth > 0; }
+
+export function coverFace(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  mode: "blur" | "icon", size: number,
+): void {
+  if (mode !== "icon" || !hasMaskImage()) { pixelate(ctx, x, y, w, h, size); return; } // fail-safe: no icon ⇒ blur
+  const img = mask!;
+  const s = Math.max(w / img.naturalWidth, h / img.naturalHeight); // cover, not contain
+  const dw = img.naturalWidth * s, dh = img.naturalHeight * s;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  ctx.fillStyle = "#000"; ctx.fillRect(x, y, w, h); // opaque floor under transparent PNGs
+  ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+  ctx.restore();
+}

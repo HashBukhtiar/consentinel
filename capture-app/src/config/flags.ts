@@ -174,6 +174,7 @@ export const flags = {
   //            Looks like a normal video with blurred people; an undetected face
   //            is shown clear. The privacy story is weaker; the picture is nicer.
   PRIVACY_BLUR: true, // operator can turn all pixelation off from the UI (raw feed for the demo)
+  MASK: "blur" as "blur" | "icon", // "faces" cover: pixelate, or paint the dropped icon over the same box (blur.ts coverFace)
   COMPOSITE: (env.VITE_COMPOSITE ?? "frame") as "frame" | "faces",
   BLUR_PAD: 0.35, // "faces" mode: pad each blurred bbox outward — fail-safe covers more, never less
 
