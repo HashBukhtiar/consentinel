@@ -23,16 +23,38 @@ const load = (file: string, w: number, h: number): ImageData => {
   execFileSync("ffmpeg", ["-v", "error", "-y", "-i", join(dir, file), "-vf", `scale=${w}:${h}`, "-f", "rawvideo", "-pix_fmt", "rgba", tmp]);
   return { data: new Uint8ClampedArray(readFileSync(tmp).buffer.slice(0)), width: w, height: h } as unknown as ImageData;
 };
+// A recording stored wider than procW (the 🎥 button keeps the camera's native width) also
+// feeds the decoder's fine sampler: the same native-res crop the live loop hands it,
+// area-averaged down with the loop's aspect-preserving cap (480x320).
+const nativeH = Math.round((index.width * index.video.h) / index.video.w);
+const makeSampler = (native: ImageData) => (nx: number, ny: number, nw: number, nh: number): ImageData | null => {
+  const vW = native.width, vH = native.height;
+  const sx = Math.round(nx * vW), sy = Math.round(ny * vH), sw = Math.round(nw * vW), sh = Math.round(nh * vH);
+  if (sw < 8 || sh < 4) return null;
+  const k = Math.min(1, 480 / sw, 320 / sh);
+  const dw = Math.max(1, Math.round(sw * k)), dh = Math.max(1, Math.round(sh * k));
+  const out = new Uint8ClampedArray(dw * dh * 4);
+  for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) {
+    const x0 = sx + Math.floor((x * sw) / dw), x1 = sx + Math.max(Math.floor(((x + 1) * sw) / dw), Math.floor((x * sw) / dw) + 1);
+    const y0 = sy + Math.floor((y * sh) / dh), y1 = sy + Math.max(Math.floor(((y + 1) * sh) / dh), Math.floor((y * sh) / dh) + 1);
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let yy = y0; yy < Math.min(vH, y1); yy++) for (let xx = x0; xx < Math.min(vW, x1); xx++) { const o = (yy * vW + xx) * 4; r += native.data[o]; g += native.data[o + 1]; b += native.data[o + 2]; n++; }
+    const o = (y * dw + x) * 4; out[o] = r / n; out[o + 1] = g / n; out[o + 2] = b / n; out[o + 3] = 255;
+  }
+  return { data: out, width: dw, height: dh } as unknown as ImageData;
+};
+const fine = process.env.REPLAY_FINE !== "0" && index.width > procW;
 
 if (flags.BEACON_OPTICAL_MODE === "key") {
   // the static-key engine: per frame, the largest candidates with the decoder's own verdict
-  console.log(`${index.frames.length} frames, stored ${index.width}px wide, decoding at ${procW}x${procH} · engine key · MIN_W=${flags.KEY_MIN_W} MARGIN=${flags.KEY_MARGIN} CONFIRM_N=${flags.KEY_CONFIRM_N}`);
+  console.log(`${index.frames.length} frames, stored ${index.width}px wide, decoding at ${procW}x${procH}${fine ? ` + fine sampler from ${index.width}px` : ""} · engine key · MIN_W=${flags.KEY_MIN_W} MARGIN=${flags.KEY_MARGIN} CONFIRM_N=${flags.KEY_CONFIRM_N}`);
   const dec = _internal.newKeyDecoder();
   const seen = new Map<string, number>();
   let firstAt = -1, ms = 0;
   for (const fr of index.frames) {
     const f = load(fr.file, procW, procH);
-    const out = dec.decode(f, fr.tMs);
+    const sampler = fine ? makeSampler(load(fr.file, index.width, nativeH)) : undefined;
+    const out = dec.decode(f, fr.tMs, sampler);
     ms += dec.debug.ms;
     for (const r of out) { seen.set(r.beaconId, (seen.get(r.beaconId) ?? 0) + 1); if (firstAt < 0) firstAt = fr.tMs; }
     const desc = dec.debug.candidates.filter((c) => !c.status.startsWith("too small")).slice(0, 3).map((c) => `${c.box.w}x${c.box.h} ${c.status}`);

@@ -46,10 +46,12 @@ that commits to the off-chain film-event log).
 
 1. **Badge → camera (light).** The badge shows a STATIC key: three giant
    7-segment hex digits, `id(8) << 4 | crc4(id)` (id `27` shows `271`), MINT
-   for opt-in and ROSE for opt-out, with a white bar to the right and below.
+   for opt-in and ROSE for opt-out, on black (the ring around the digits is
+   painted black since the webcam runs: white bloomed into the last digit).
    The app's decoder (`capture-app/src/decode/key.ts`) finds the digits, fits
    the grid, reads all three, checks the CRC, and binds the id to the nearest
-   face above. One clean frame is enough; nothing blinks.
+   face above. One clean frame is enough; nothing blinks. The status LEDs are
+   filtered out by their white-cored halo, but keep them dim (LED_LEVEL 64).
 2. **Camera → chain (read).** The face is clear only if the chain-synced cache
    says that id is `opt_in`. Unknown, stale, no badge ⇒ blur.
 3. **Camera → service (FilmEvent).** An opted-out person on camera fires a
@@ -85,7 +87,7 @@ Then, in order:
    `OPT-IN`/`OPT-OUT`; **A** toggles consent, **START arms the beacon** (the
    three giant digits; UP/DOWN dims them, any other key returns to CONFIG;
    **LEFT** turns the six LEDs off — do that if their glare lands on the
-   screen). Any badge works: the first time a camera sees an id with no
+   screen; the debug HUD's `ms/frame` line shows where the frame time goes). Any badge works: the first time a camera sees an id with no
    record, the service registers it as `opt_out` (organizer key), so its card
    appears in the panel within a few seconds. No badge? **Synthetic badge** in
    the app paints a real-format `4E` key (works without a camera too).

@@ -1,7 +1,9 @@
 // §10 feature flags + pipeline tuning. Safe defaults: hero path runs with
 // everything else off. Tune the beacon/perf knobs for your camera at the venue.
 // Override any VITE_* value with a capture-app/.env.local file.
-const env = ((import.meta as any).env ?? {}) as Record<string, string | undefined>;
+// Vite injects import.meta.env in the browser; under tsx (scripts/replay.ts, the tests)
+// the shell environment stands in, so VITE_* overrides work there too.
+const env = ((import.meta as any).env ?? (typeof process !== "undefined" ? process.env : {})) as Record<string, string | undefined>;
 const cluster = (env.VITE_SOLANA_CLUSTER ?? "devnet") as "devnet" | "localnet";
 
 export const flags = {
@@ -68,6 +70,8 @@ export const flags = {
   KEY_MERGE_FLOOR_PX: 1.5, // …or when they all but touch (blur-broken corners)
   KEY_MERGE_REACH_H: 0.75, // horizontal reach never exceeds this × the cluster's height (90 units over a 124–160-unit digit)
   KEY_MERGE_CLUSTER_FRAC: 0.25, // …or within this × the cluster's height (the pieces of a hollowed-out bar close up; an LED is ≥ 0.66 heights above/below)
+  KEY_MERGE_ROW_FRAC: 0.5, // a member beside the cluster must share this fraction of the shorter height with it (one row of digits); a stacked pair must share this much width
+  KEY_MERGE_STACK_W: 2.5, // a stacked pair's widths agree to this ratio (the two bars of a '1' are equal; an LED halo is 4–6 bar widths)
   KEY_MERGE_LIT_TOL: 0.10, // …and only if its lit level is within this fraction of the cluster's (segments are uniform; flare and glow are dimmer)
   KEY_THIN_PX: 6, // parts thinner than this (far bars) get the looser band below: their mean is dragged down by edge pixels
   KEY_MERGE_LIT_TOL_THIN: 0.3,
@@ -77,21 +81,25 @@ export const flags = {
   KEY_STRETCH_MIN: 0.6, // x-scale over y-scale a hypothesis may imply (yaw foreshortening)
   KEY_STRETCH_MAX: 1.6,
   KEY_MIN_CONTRAST: 40, // lit − dark, in the digit's channel
-  KEY_DARK_MAX_FRAC: 0.6, // the always-dark spots must read below this × lit
+  KEY_TRAILING_ONE: (env.VITE_KEY_TRAILING_ONE ?? "1") !== "0", // when no three-cell placement fits, retry the extent as cells 0–1 with a '1' beyond it (its bars drown in the white bar's bloom at ~1 m)
+  KEY_DARK_MAX_FRAC: 0.75, // the always-dark spots must read below this × lit (a webcam at 1 m: bars 240, the display's blacks bloom to 120–150 = 0.63)
   KEY_SAMPLE_FRAC: 0.3, // half-size of a sample box as a fraction of the segment thickness
-  KEY_REFINE_FROM: -0.1, // refine a placement only if it starts at least this well (below: not even roughly right)
+  KEY_SAMPLE_R_WEIGHT: Number(env.VITE_KEY_SAMPLE_R_WEIGHT ?? 0), // the fit samples G − this × R (mint; R − this × G for rose): 0 = the raw channel, 1 = pure chroma. See samplePlane()
+  KEY_REFINE_FROM: -0.5, // refine a placement only if it starts at least this well (below: not even roughly right). The white L bar blooms into the digits next to it and stretches the hull by ~10%, which starts the true placement near −0.4
   KEY_REFINE_FINE_FROM: 0.08, // …and run the half-pixel phase only from here
   KEY_REFINE_ITERS: 8, // coordinate-descent steps per phase (1 px, then 0.5 px) per edge
-  KEY_MARGIN: 0.2, // every sample at least this far (× contrast) from the lit/dark midpoint
+  KEY_MARGIN: 0.2, // a sample is unambiguous when at least this far (× contrast) from the lit/dark threshold
+  KEY_MAX_ERASURES: Number(env.VITE_KEY_MAX_ERASURES ?? 3), // …and up to this many SEGMENT samples may be ambiguous per read: the code (hex glyphs + CRC-4 + which border segments are unlit) must then leave exactly one id
   KEY_RIVAL_FRAC: 0.7, // a second id whose margin is ≥ this × the best one's ⇒ ambiguous ⇒ no reading
   KEY_TRIM_MAX: 4, // when a cluster fails to fit, peel up to this many brightness-deviant members (one at a time) and retry (junk stuck to the key)
   KEY_TRIM_CANDIDATES: 2, // …but only for the largest few clusters per frame (a retry is a full fit)
   KEY_MAX_FITS: 4, // fits per frame, largest candidates first (measured ~3–5 ms each at 1280 with retries)
   KEY_LED_WHITE_T: 235, // every channel above this = a saturated-white core (an LED at full drive)
   KEY_LED_MIN_PX: 8, // LED filter applies to blobs at least this thick…
-  KEY_LED_ASPECT_MIN: 0.7, // …that are round-ish (no key part is: bars 0.34 / 2.2, digits ~0.5, a whole key ≥ 1.1)…
-  KEY_LED_ASPECT_MAX: 1.4,
-  KEY_LED_CORE_FRAC: 0.06, // …and whose box is at least this much saturated white
+  KEY_LED_ASPECT_MIN: 0.6, // …that are round-ish (bars are 0.34 / 2.2, digits ~0.5; a whole key is 1.6 but carries no core)…
+  KEY_LED_ASPECT_MAX: 1.7,
+  KEY_LED_CORE_FRAC: 0.01, // …and whose inner half holds at least this fraction of the blob's mask pixels in saturated white (halos measured 2–5%, digits 0)…
+  KEY_LED_CORE_MIN_PX: 4, // …and at least this many such pixels
   KEY_CONFIRM_N: 2, // decodes of the same id+consent within BEACON_CONFIRM_MS before it is reported
   // seq decoder knobs (measured on data/diag 2026-09-20, 1.5 m, 20 fps):
   SEQ_DIFF_T: 60, // sum |ΔR|+|ΔG|+|ΔB| between consecutive frames that counts as "changed" (badge symbol changes measure 40–400; sensor noise ~20)

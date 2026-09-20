@@ -48,7 +48,8 @@ export function App() {
     const v = videoRef.current;
     if (!v || !v.videoWidth) { setDiag("start a camera/clip first"); return; }
     try {
-      const seq = await captureSequence(v, 4, 20, 1280, (n) => setDiag(`recording… ${n} frames`));
+      // native width: the replay then runs the same native-res crop (fine sampler) the live loop uses
+      const seq = await captureSequence(v, 4, 15, v.videoWidth, (n) => setDiag(`recording… ${n} frames`));
       setDiag(`uploading ${seq.frames.length} frames…`);
       setDiag(await sendSequence(seq));
     } catch (e) { setDiag(`record failed: ${(e as Error).message}`); }

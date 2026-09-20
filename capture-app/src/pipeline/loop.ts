@@ -20,6 +20,7 @@ export interface PipelineState {
   beacons: BeaconReading[]; // decoded this frame (confirmed ids), before association
   debug: BeaconDebug | null; // optical decoder diagnostics (null for the stub)
   procWidth: number;
+  stageMs: Record<string, number>; // smoothed per-stage cost of the last frames (grab, detect, decode, blur, total)
 }
 
 // The hot loop. Order: draw → detect → track → decode beacons → associate →
@@ -47,6 +48,15 @@ export class Pipeline {
   // same frame ⇒ skip. A 500 ms valve guarantees the loop never stalls.
   private lastFingerprint = -1;
   private lastRunAt = 0;
+  // exponentially smoothed per-stage cost, ms — shown in the debug HUD
+  private stageMs: Record<string, number> = {};
+  private timed<T>(name: string, fn: () => T): T {
+    const t0 = performance.now();
+    const r = traceStage(name, fn);
+    const ms = performance.now() - t0;
+    this.stageMs[name] = (this.stageMs[name] ?? ms) * 0.8 + ms * 0.2;
+    return r;
+  }
 
   constructor(
     private video: HTMLVideoElement,
@@ -84,6 +94,7 @@ export class Pipeline {
 
     const dctx = this.display.getContext("2d")!;
     const pctx = this.detectCanvas.getContext("2d", { willReadFrequently: true })!; // getImageData every frame
+    const tGrab = performance.now();
     pctx.drawImage(v, 0, 0, procW, procH);
     const imageData = pctx.getImageData(0, 0, procW, procH); // A's decoder reads this
     const fp = fingerprint(imageData);
@@ -91,6 +102,7 @@ export class Pipeline {
     if (fp === this.lastFingerprint && tMs - this.lastRunAt < 500) return; // same video frame: keep the composite
     this.lastFingerprint = fp;
     this.lastRunAt = tMs;
+    this.stageMs.grab = (this.stageMs.grab ?? 0) * 0.8 + (tMs - tGrab) * 0.2;
     dctx.drawImage(v, 0, 0, dispW, dispH);
 
     // trace ~once/sec: a span tree over the stages, never every frame (120fps)
@@ -114,14 +126,14 @@ export class Pipeline {
     const optical = flags.BEACON_DECODER === "optical";
     let beacons: BeaconReading[] = [];
     const runStages = (): Track[] => {
-      const faces = traceStage("detect", () => detectFaces(this.detector, this.detectCanvas, tMs));
+      const faces = this.timed("detect", () => detectFaces(this.detector, this.detectCanvas, tMs));
       const tracks = traceStage("track", () => this.tracker.update(faces));
-      beacons = traceStage("decode", () => (optical ? opticalDecode(imageData, tMs, sampleRegion) : stubDecode(imageData, tMs)));
+      beacons = this.timed("decode", () => (optical ? opticalDecode(imageData, tMs, sampleRegion) : stubDecode(imageData, tMs)));
       traceStage("associate", () => associate(tracks, beacons, tMs));
       traceStage("decide", () => decide(tracks, getConsent, tMs)); // sync read of the Solana-synced cache
       // the badge's A button, over light: relay a consent bit that disagrees with the chain (debounced, fire-and-forget)
       traceStage("request", () => { for (const b of beacons) if (b.optIn !== undefined) consentRequester.observe(b.beaconId, b.optIn, getConsent(b.beaconId)); });
-      traceStage("blur+notify", () => {
+      this.timed("blur", () => {
         if (flags.COMPOSITE === "frame") {
           // DEFAULT DENY, as a composite: pixelate the WHOLE frame, then punch
           // clear windows only for faces with an explicit opt_in. A face the
@@ -152,13 +164,14 @@ export class Pipeline {
 
     const tracks = doTrace ? traceFrame(runStages) : runStages();
     this.logDecisions(tracks);
-    drawOverlay(dctx, dispW, dispH, tracks, beacons, optical ? lastDebug : null, flags.BEACON_DEBUG);
-
     const now = performance.now();
+    this.stageMs.total = (this.stageMs.total ?? 0) * 0.8 + (now - tGrab) * 0.2;
+    drawOverlay(dctx, dispW, dispH, tracks, beacons, optical ? lastDebug : null, flags.BEACON_DEBUG, this.stageMs);
+
     const dt = now - this.lastT; this.lastT = now;
     this.fps = this.fps * 0.9 + (1000 / Math.max(1, dt)) * 0.1;
     if (this.tick++ % 6 === 0) {
-      this.onState({ fps: Math.round(this.fps), tracks: tracks.map((t) => ({ ...t })), beacons, debug: optical ? lastDebug : null, procWidth: procW });
+      this.onState({ fps: Math.round(this.fps), tracks: tracks.map((t) => ({ ...t })), beacons, debug: optical ? lastDebug : null, procWidth: procW, stageMs: { ...this.stageMs } });
     }
   };
 
@@ -211,7 +224,7 @@ function fingerprint(img: ImageData): number {
 // Drawn AFTER the default-deny composite so it is visible on top of the blur.
 function drawOverlay(
   ctx: CanvasRenderingContext2D, W: number, H: number,
-  tracks: Track[], beacons: BeaconReading[], dbg: BeaconDebug | null, debug: boolean,
+  tracks: Track[], beacons: BeaconReading[], dbg: BeaconDebug | null, debug: boolean, stageMs: Record<string, number> = {},
 ): void {
   ctx.save();
   ctx.lineWidth = 2;
@@ -246,6 +259,9 @@ function drawOverlay(
         : (dbg.bright < 0.002 ? " — no bright ring: closer / START the beacon / dimmer room" : " — bright blobs but none 4:3 with a white ring");
     const hud = `decode ${dbg.width}px · ${mode} · ${n} ${noun}${n === 1 ? "" : "s"}${n === 0 ? none : ""}${dbg.ms !== undefined ? ` · ${dbg.ms.toFixed(0)} ms` : ""}`;
     label(8, H - 8, hud, "#e6ebf5");
+    // where the frame time goes (smoothed): the answer to "why is it slow?"
+    const cost = ["grab", "detect", "decode", "blur", "total"].filter((k) => stageMs[k] !== undefined).map((k) => `${k} ${stageMs[k].toFixed(0)}`).join(" · ");
+    if (cost) label(8, H - 26, `ms/frame: ${cost}`, "#e6ebf5");
   }
   if (dbg && dbg.width) {
     const sx = W / dbg.width, sy = H / dbg.height;
