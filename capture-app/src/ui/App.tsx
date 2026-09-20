@@ -5,6 +5,7 @@ import { flags } from "../config/flags";
 import { setMaskImage } from "../vision/blur";
 import { OperatorPanel } from "./OperatorPanel";
 import { NoticeToasts } from "./NoticeToast";
+import { BadgeSetup } from "./BadgeSetup";
 import { chain, startConsent } from "../consent/store";
 import type { FilmEvent, Track } from "../shared/schema";
 
@@ -95,6 +96,7 @@ export function App() {
           <span>consent-respecting capture</span>
         </div>
         <div className="badges">
+          <BadgeSetup />
           <span className={"chip live" + (running ? " on" : "")}>{running ? <>Live<i>{source}</i></> : "Idle"}</span>
           {chain && <span className="chip chain-chip" title={chain.status.programId}>Solana {chain.status.cluster}</span>}
         </div>

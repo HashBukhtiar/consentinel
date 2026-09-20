@@ -6,72 +6,67 @@ api=2
 heap_kb=96
 wake_lock=1
 confirm_home=1
-version=0.4.0
+version=0.8.0
 author=Consentinel
 ]==]
 
--- Consentinel consent beacon (HTN 2026).
---   CONFIG screen -- large text, for the WEARER at arm's length.
---   BEACON screen -- a STATIC key the camera reads: white ring + three giant
---     hex digits. No blinking, no timing, no clock recovery. One frame is
---     enough to decode, so dropped frames and a variable call frame rate
---     stop mattering.
+-- Consentinel consent beacon (HTN 2026). MUST match shared/beacon.ts.
+--   CONFIG -- large text, for the WEARER at arm's length.
+--   BEACON -- black screen, the 3-digit KEY 208 px tall in GREEN (opt-in) or
+--             RED (opt-out). Static; one frame decodes.
 --
--- The key is the 12-bit payload shared/beacon.ts already defines:
---   id(8) << 4 | crc4(id)   ->  3 hex digits, e.g. id 0x1A -> "1A9"
--- so packPayload / unpackPayload on the decoder side work unchanged. A
--- misread digit fails CRC, and a CRC failure means BLUR -- never guess.
---
--- Digits are drawn as 7-segment boxes, not text: the fonts this LVGL build
--- has top out at 24 px, which is unreadable at any camera distance. These are
--- 160 px tall.
+-- Shape carries identity, colour carries consent, and they are independent:
+-- id(8) << 4 | crc4(id) = 12 bits = 3 hex digits. Digits 1-2 are the id,
+-- digit 3 is the check digit. A misread digit fails CRC, and CRC = BLUR.
 
 local BUTTON = badge.input.BUTTON
 local PRESSED = badge.input.KIND.PRESSED
 
 -- ---------------------------------------------------------------- geometry
--- ST7789, fixed. PAD escapes the padding on root: a child placed at -PAD
--- lands on screen pixel 0, so every coordinate below is "screen minus PAD".
-local PAD = 30
-local PATCH_W, PATCH_H = 320, 240
-local POS_X, POS_Y = -PAD, -PAD
+-- ===> SET PATCH_W / PATCH_H. Everything else derives and centres itself. <===
+-- PANEL_* verified on hardware with firmware/screen-ruler.lua.
+local PANEL_X, PANEL_Y = 0, 0      -- cancels root's 30 px pad
+local PANEL_W, PANEL_H = 320, 240      -- true ST7789 panel
+local PATCH_W, PATCH_H = 320, 240      -- <-- BEACON SIZE. THIS IS THE KNOB.
 
--- The ring's geometry is kept (the digit grid is laid out inside it and the
--- decoder's KEY contract in shared/beacon.ts depends on that), but the ring
--- is painted BLACK now: the static-key decoder never reads it, and on a webcam
--- at 0.5-1 m its blown-out white bloomed 2-6 px into the digits next to it,
--- which lit the last digit's bottom segment and drowned a trailing '1'. Set
--- RING to BASE_WHITE to get the old look back.
-local BORDER = 24
-local RING = 0x000000
-local IN_X, IN_Y = POS_X + BORDER, POS_Y + BORDER
-local IN_W, IN_H = PATCH_W - 2 * BORDER, PATCH_H - 2 * BORDER  -- 272 x 192
+local PATCH_X = (PANEL_W - PATCH_W) // 2
+local PATCH_Y = (PANEL_H - PATCH_H) // 2
 
--- Three digits across the interior.
-local D_N, D_W, D_H, D_T, D_GAP = 3, 76, 160, 18, 14
-local D_HALF = (D_H - 3 * D_T) // 2                            -- 53
-local D_X = IN_X + (IN_W - (D_N * D_W + (D_N - 1) * D_GAP)) // 2
-local D_Y = IN_Y + (IN_H - D_H) // 2
+-- Margin keeps the strokes off the bezel, where glare and viewing angle eat
+-- them first. Everything inside it is digits; there is no frame and no stripe.
+local MARGIN = PATCH_W // 20                            -- 16 at 320
+local CX, CY = PATCH_X + MARGIN, PATCH_Y + MARGIN
+local CW, CH = PATCH_W - 2 * MARGIN, PATCH_H - 2 * MARGIN   -- 288x208
+
+-- Boxes, not text: this LVGL build tops out at a 24 px font, unreadable at
+-- camera distance. These are 208 px tall with a 22 px stroke.
+local D_N    = 3
+local D_GAP  = CW // 24                                 -- 12 at 288
+local D_W    = (CW - (D_N - 1) * D_GAP) // D_N          -- 88 at 320
+local D_H    = CH                                       -- 208 at 240
+local D_T    = D_W // 4                                 -- 22 stroke
+local D_HALF = (D_H - 3 * D_T) // 2                     -- 71
+local D_X    = CX + (CW - (D_N * D_W + (D_N - 1) * D_GAP)) // 2
+local D_Y    = CY
+
+-- ----------------------------------------------------------------- colours
+-- Undimmed. The DIGITS carry consent in their hue, RESTRICT-ONLY: a face
+-- clears only when the chain record says opt-in AND the light says opt-in.
+-- Pure primaries, so one channel is at 0 and argmax cannot be talked out of it.
+local BASE_IN, BASE_OUT = 0x00FF00, 0xFF0000   -- GREEN / RED
+local BASE_WHITE, OFF = 0xFFFFFF, 0x000000
 
 -- Segment bits: 1 a(top) 2 b(top-right) 4 c(bottom-right) 8 d(bottom)
 --              16 e(bottom-left) 32 f(top-left) 64 g(middle)
+-- MUST match SEG in shared/beacon.ts.
 local SEG = {
   0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07,   -- 0 1 2 3 4 5 6 7
-  0x7F, 0x6F, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71,   -- 8 9 A B C D E F
+  0x7F, 0x6F, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71,   -- 8 9 A b C d E F
 }
-
--- ----------------------------------------------------------------- colours
--- Undimmed. Digit colour carries consent, RESTRICT-ONLY: a face clears only
--- when the chain record says opt-in AND the light says opt-in.
-local BASE_IN, BASE_OUT = 0x00FF84, 0xFF0084   -- MINT / ROSE
-local BASE_WHITE, OFF = 0xFFFFFF, 0x000000
 
 -- ------------------------------------------------------------- wire format
 local ID_BITS, CRC_BITS = 8, 4                 -- MUST match shared/beacon.ts
--- 255 blew the LEDs out to a 25 px white-cored halo at 1 m on a 1080p webcam,
--- hugging the display's corners; the decoder now filters those, but at 64 the
--- halo is a quarter the size and the colour still reads across a room.
-local LED_LEVEL = 64        -- safe ONLY because the LEDs never blink
+local LED_LEVEL = 255       -- safe ONLY because the LEDs never blink
 local STOPPED_MS, ALERT_MS = 2500, 6000
 local RADIO_TAG = "CNS"
 local BR_MIN, BR_MAX, BR_STEP = 30, 100, 5
@@ -81,7 +76,7 @@ local st = {
   screen = 1,    -- 1 = config, 2 = beacon
   beacon_id = 0,
   consent = 0,   -- FAIL-SAFE: unset or unknown transmits OPT-OUT
-  bright = 75,   -- percent. Aim for a measured ring luma of 190-210.
+  bright = 75,   -- percent
   leds_on = true,
   radio_on = false,
   radio_ok = false,
@@ -104,9 +99,8 @@ local function hex2(v)
   return HEXDIG:sub(hi + 1, hi + 1) .. HEXDIG:sub(lo + 1, lo + 1)
 end
 
--- Scales the digits AND the ring by one factor, so every ratio the decoder
--- sees is unchanged. What it does change is absolute luminance -- the thing a
--- camera clips. Clipped means digits == ring == white and the key is gone.
+-- Scales all three channels by one factor, so hue is untouched and the
+-- green/red decision survives. It changes luminance -- what a camera clips.
 local function dim(c)
   local b = st.bright
   return (((((c >> 16) & 0xFF) * b) // 100) << 16)
@@ -139,38 +133,36 @@ local function key_text()
 end
 
 -- --------------------------------------------------------------- the digits
--- One 7-segment digit, laid out from its top-left corner.
-local function seg_geom(dx, s)
-  local T, W, H, Hf = D_T, D_W, D_H, D_HALF
-  if s == 1 then return dx + T,     D_Y,                W - 2 * T, T  end
-  if s == 2 then return dx + W - T, D_Y + T,            T,         Hf end
-  if s == 3 then return dx + W - T, D_Y + 2 * T + Hf,   T,         Hf end
-  if s == 4 then return dx + T,     D_Y + H - T,        W - 2 * T, T  end
-  if s == 5 then return dx,         D_Y + 2 * T + Hf,   T,         Hf end
-  if s == 6 then return dx,         D_Y + T,            T,         Hf end
-  return             dx + T,        D_Y + T + Hf,       W - 2 * T, T
+-- Rect of segment s (0..6) for a digit at x,y. Vertical budget is exactly
+-- 3*D_T + 2*D_HALF = D_H. MUST match segRect in shared/beacon.ts.
+local function seg_geom(s, x, y)
+  local mid = y + D_T + D_HALF
+  if s == 0 then return x + D_T, y, D_W - 2 * D_T, D_T end
+  if s == 1 then return x + D_W - D_T, y + D_T, D_T, D_HALF end
+  if s == 2 then return x + D_W - D_T, mid + D_T, D_T, D_HALF end
+  if s == 3 then return x + D_T, y + D_H - D_T, D_W - 2 * D_T, D_T end
+  if s == 4 then return x, mid + D_T, D_T, D_HALF end
+  if s == 5 then return x, y + D_T, D_T, D_HALF end
+  return x + D_T, mid, D_W - 2 * D_T, D_T
 end
 
--- Repaint ring + digits. Called on any change to id, consent or brightness;
--- never from on_tick.
+-- Repaint the digits. Never from on_tick. Digit 0 is the MSN. One colour for
+-- every lit segment: consent is the hue, so it cannot disagree with itself.
 local function paint_key()
-  local on = dim((st.consent == 1) and BASE_IN or BASE_OUT)
   local p = payload()
-  ui.frame:style({ bg_color = dim(RING) })
+  local lit = dim((st.consent == 1) and BASE_IN or BASE_OUT)
   for d = 0, D_N - 1 do
-    local nibble = (p >> (4 * (D_N - 1 - d))) & 0xF
-    local mask = SEG[nibble + 1]
-    for s = 1, 7 do
-      local lit = (mask >> (s - 1)) & 1
-      ui.seg[d * 7 + s]:style({ bg_color = (lit == 1) and on or OFF })
+    local bits = SEG[((p >> (4 * (D_N - 1 - d))) & 0xF) + 1]
+    for s = 0, 6 do
+      ui.seg[d * 7 + s + 1]:style({
+        bg_color = (((bits >> s) & 1) == 1) and lit or OFF })
     end
   end
 end
 
 -- --------------------------------------------------------------------- leds
--- Static, never blinking: six WS2812s switching every 100 ms is a ~127 mA
--- step that rings the boost converter. Six point sources 25 mm apart are not
--- a patch the localizer can rectify, so these are a HUMAN channel only.
+-- Static: six WS2812s at 100 ms is a ~127 mA step that rings the boost
+-- converter. Point sources, not a patch: a HUMAN channel only.
 local function led_consent()
   if not st.leds_on then
     badge.led.clear() badge.led.show() return
@@ -183,16 +175,16 @@ end
 -- ----------------------------------------------------------------------- ui
 local function refresh_config()
   local yes = st.consent == 1
-  ui.c_id:set_text("KEY " .. key_text())
+  ui.c_id:set_text(key_text())
+  ui.c_id:style({ text_color = yes and BASE_IN or BASE_OUT })
   ui.c_cons:set_text(yes and "OPT-IN" or "OPT-OUT")
   ui.c_cons:style({ text_color = yes and BASE_IN or BASE_OUT })
-  ui.c_rate:set_text(string.format("id %s  bright %d%%  leds %s  radio %s",
-    hex2(st.beacon_id), st.bright, st.leds_on and "on" or "off",
+  ui.c_rate:set_text(string.format("bright %d%%  leds %s  radio %s",
+    st.bright, st.leds_on and "on" or "off",
     st.radio_on and (st.radio_ok and "on" or "FAIL") or "off"))
 end
 
--- One banner widget, two messages. Never called from on_tick: LED writes and
--- NVS commits stay off the hot path.
+-- One banner widget, two messages. Never from on_tick.
 local function notice(text, colour, ms, r, g, b)
   ui.c_ban:set_text(text)
   ui.c_ban:style({ text_color = colour })
@@ -228,23 +220,25 @@ local function on_radio(mac, rssi, payload_str)
   if id == nil or id ~= st.beacon_id then return end
 
   if kind == "F" then
-    notice("YOU WERE FILMED", 0xF87171, ALERT_MS, LED_LEVEL, 0, 0)
+    -- MAGENTA: the banner is on the hidden CONFIG screen while armed, so the
+    -- LEDs are the only channel -- and red is already opt-out's resting state.
+    notice("YOU WERE FILMED", 0xF87171, ALERT_MS, LED_LEVEL, 0, LED_LEVEL)
   elseif kind == "C" then
-    local s = payload_str:sub(7, 7)
-    if s == "1" or s == "0" then
-      st.consent = (s == "1") and 1 or 0
-      badge.store.set("consent", st.consent)
+    -- RESTRICT-ONLY. The id is public (two of the three digits on screen), so
+    -- an unsigned CNSC*1 would let anyone opt you IN. Opt-out is safe.
+    if payload_str:sub(7, 7) == "0" and st.consent ~= 0 then
+      st.consent = 0
+      badge.store.set("consent", 0)
       paint_key() led_consent() refresh_config()
     end
   end
 end
 
 -- ---------------------------------------------------------------- lifecycle
--- ALWAYS derived, never stored: the registry derives the id from this same
--- FNV-1a hash, so an override would silently stop matching the chain record.
--- The offset basis MUST be hex -- this badge has 32-bit integers in Lua, and
--- the decimal form exceeds INT_MAX, parses as a float, and then fails every
--- bitwise operator. Overflow wraps two-s complement, which is what FNV wants.
+-- ALWAYS derived, never stored: the registry uses this same FNV-1a hash, so
+-- an override would stop matching the chain record. The basis MUST stay hex:
+-- the decimal form exceeds INT_MAX here, parses as a float, and then fails
+-- every bitwise operator.
 local function derive_beacon_id()
   local bid = badge.me.badge_id()
   if type(bid) ~= "string" or #bid == 0 then return 0 end
@@ -284,38 +278,28 @@ function on_enter(root)
   st.leds_on = badge.store.get_int("leds", 1) == 1
   st.beacon_id = derive_beacon_id()
 
-  ui.bg = box(root, PATCH_W, PATCH_H, 0, 0, OFF)
+  -- The one negative offset: cancels root's padding so ui.bg IS the panel.
+  ui.bg = box(root, PANEL_W, PANEL_H, PANEL_X, PANEL_Y, OFF)
 
-  -- Both screens are built here and one is hidden. There is no pcall on this
-  -- badge, so a stale widget reference is an unrecoverable kill. Every widget
-  -- touched later is created unconditionally.
-  ui.bcn = box(ui.bg, PATCH_W, PATCH_H, 0, 0, OFF)
-
-  -- The ring is a white box UNDERNEATH the interior, not set_border() plus
-  -- pad_all: two absolutely positioned siblings cannot disagree about inset
-  -- semantics. PATCH_* is the TRUE panel size, so the ring closes on all four
-  -- edges -- oversizing it runs the right and bottom off-screen and leaves
-  -- the localizer an open quad it cannot rectify.
-  ui.frame = box(ui.bcn, PATCH_W, PATCH_H, POS_X, POS_Y, RING)
-  ui.inner = box(ui.bcn, IN_W, IN_H, IN_X, IN_Y, OFF)
-  ui.inner:bring_to_front()
-
+  -- Both screens built here, one hidden. No pcall on this badge, so every
+  -- widget touched later must be created unconditionally.
+  -- BEACON is black with nothing on it but 21 segment boxes: no frame, no
+  -- stripe, nothing overlapping, so no z-order to get wrong.
+  ui.bcn = box(ui.bg, PANEL_W, PANEL_H, 0, 0, OFF)
   for d = 0, D_N - 1 do
     local dx = D_X + d * (D_W + D_GAP)
-    for s = 1, 7 do
-      local x, y, w, h = seg_geom(dx, s)
-      local b = box(ui.bcn, w, h, x, y, OFF)
-      b:bring_to_front()
-      ui.seg[d * 7 + s] = b
+    for s = 0, 6 do
+      local x, y, w, h = seg_geom(s, dx, D_Y)
+      ui.seg[d * 7 + s + 1] = box(ui.bcn, w, h, x, y, OFF)
     end
   end
   ui.bcn:hidden(true)
 
   -- Fonts are 14 and 24 only: the sizes this LVGL build is known to have.
-  ui.cfg = box(ui.bg, PATCH_W, PATCH_H, 0, 0, 0x101014)
+  ui.cfg = box(ui.bg, PANEL_W, PANEL_H, 0, 0, 0x101014)
   local who = badge.me.name()
-  ui.c_name = label(ui.cfg, type(who) == "string" and who or "unprovisioned",
-                    8, 0xE5E7EB, 24)
+  ui.c_name = label(ui.cfg, (type(who) == "string" and #who > 0) and who
+                    or "unprovisioned", 8, 0xE5E7EB, 24)
   ui.c_id   = label(ui.cfg, "", 44, BASE_WHITE, 24)
   ui.c_cons = label(ui.cfg, "", 80, BASE_WHITE, 24)
   ui.c_rate = label(ui.cfg, "", 116, 0x9CA3AF, 14)
@@ -327,12 +311,10 @@ function on_enter(root)
 
   refresh_config()
   led_consent()
-  -- Boot into CONFIG: the beacon is something you arm. A reboot mid-demo
-  -- leaves the badge dark, which reads as "no beacon" and so as "blur".
+  -- Boot into CONFIG: the beacon is something you arm. Dark = no beacon = blur.
 end
 
--- The key is static, so the only thing left on the hot path is expiring the
--- banner. Nothing here touches the beacon screen.
+-- The key is static: all that is left on the hot path is expiring the banner.
 function on_tick()
   if st.note_on and badge.sys.ms() >= st.note_until then
     st.note_on = false
@@ -348,21 +330,15 @@ end
 
 function on_button(button, kind)
   if kind ~= PRESSED then return end
-  local now = badge.sys.ms()
 
-  -- BEACON screen. UP/DOWN tune brightness live, so you can chase a ring luma
-  -- of 190-210 on the call without re-pushing. EVERY other key stops the
-  -- beacon -- a wearer who wants to stop broadcasting must always be able to,
-  -- and the stop is impossible to miss: the key disappears, large text
-  -- returns, amber banner and amber LEDs hold for 2.5 s.
+  -- BEACON screen. UP/DOWN tune brightness live. EVERY other key stops the
+  -- beacon: a wearer must always be able to stop broadcasting, unmissably.
   if st.screen == 2 then
     if button == BUTTON.UP then nudge_bright(BR_STEP) return end
     if button == BUTTON.DOWN then nudge_bright(-BR_STEP) return end
     show_config()
     refresh_config()
-    if now >= st.note_until then
-      notice("BEACON STOPPED", 0xFFBD00, STOPPED_MS, LED_LEVEL, 26, 0)
-    end
+    notice("BEACON STOPPED", 0xFFBD00, STOPPED_MS, LED_LEVEL, 26, 0)
     return
   end
 
@@ -370,19 +346,17 @@ function on_button(button, kind)
     st.consent = (st.consent == 1) and 0 or 1
     badge.store.set("consent", st.consent)
     led_consent()
-    -- The badge holds no keypair and cannot sign: this is a REQUEST the
-    -- registry client signs and submits.
+    -- The badge cannot sign: this is a REQUEST the registry client submits.
     radio_send(RADIO_TAG .. "R" .. hex2(st.beacon_id) .. tostring(st.consent))
     refresh_config()
 
   elseif button == BUTTON.UP then
+    -- No store.set: save() on START and on_exit persists it already.
     nudge_bright(BR_STEP)
-    badge.store.set("bright", st.bright)
     refresh_config()
 
   elseif button == BUTTON.DOWN then
     nudge_bright(-BR_STEP)
-    badge.store.set("bright", st.bright)
     refresh_config()
 
   elseif button == BUTTON.LEFT then

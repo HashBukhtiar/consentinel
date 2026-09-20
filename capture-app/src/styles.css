@@ -224,3 +224,41 @@ code { background: var(--mask-2); padding: 1px 5px; border-radius: 5px; font-siz
 .toast.notified a { color: var(--mint); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+
+/* ---- badge setup (organizer pre-flight, reachable from the topbar) ---- */
+/* Borrows this sheet's own controls — .chip for the pill metrics, .toggle for
+   the buttons, --r-* for the corners — so the dialog sits inside the design
+   instead of beside it. Mint is the sheet's "live / affirmative" accent; the
+   opener takes it to read as an action among the status chips. */
+.setup-open { cursor: pointer; background: none; color: var(--silk); border-color: rgba(61, 242, 164, .35); }
+.setup-open:hover { border-color: var(--mint); background: rgba(61, 242, 164, .08); }
+.setup-open span { color: var(--mint); line-height: 1; }
+
+.setup-dlg { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel);
+  color: var(--fg); padding: 0; width: min(720px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; }
+.setup-dlg::backdrop { background: rgba(22, 17, 31, .72); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.dlg-body { padding: 18px 20px 20px; }
+.dlg-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.dlg-head h2 { font-size: 17px; font-weight: 650; margin: 0; letter-spacing: -0.02em; }
+.dlg-meta { display: flex; flex-wrap: wrap; gap: 4px 9px; align-items: baseline; font-size: 11.5px; color: var(--muted); }
+.dlg-meta .mono { color: var(--silk); }
+.dlg-x { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; padding: 0 2px; }
+.dlg-x:hover { color: var(--silk); border: none; }
+
+.btnrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.setup-dlg a.toggle { display: inline-block; text-decoration: none; }
+.setup-dlg a.toggle:hover { border-color: var(--trace); }
+.steps { margin: 0 0 12px; padding-left: 22px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.steps li { margin-bottom: 5px; }
+.steps li::marker { color: var(--faint); font-size: 11.5px; }
+.steps b { color: var(--silk); font-weight: 650; }
+.steps em { color: var(--warn); font-style: normal; }
+.setup-note { font-size: 12.5px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
+.setup-note b { color: var(--silk); font-weight: 650; }
+/* The one place a real fixed pitch is warranted: this is literal Lua, and this
+   sheet's "mono" is a condensed cut of the sans face, not a monospace. */
+.luasrc { max-height: 42vh; overflow: auto; margin: 0; padding: 11px 12px; background: var(--board);
+  border: 1px solid var(--line); border-radius: var(--r-ctl); font-size: 11px; line-height: 1.5;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--muted); white-space: pre; user-select: text; cursor: text; }
+@media (prefers-reduced-motion: reduce) { .setup-dlg::backdrop { backdrop-filter: none; } }
