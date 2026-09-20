@@ -64,6 +64,7 @@ check(back.body.result === "relayed", `restored ${BADGE} to ${c0.body.consent ? 
 
 // 6. the notice: filmed → told, two camera-signed transactions, readable straight from the chain
 if (fe.body.notice === "disabled") check(false, "notices are disabled on the service (NOTIFY_ON_CHAIN / camera key)");
+else if (fe.body.notice?.stage === "coalesced") check(true, `notice coalesced onto the one filed ${Math.round((ev.at - fe.body.notice.coveredBy.at) / 1000)}s ago for ${BADGE} (NOTICE_MIN_INTERVAL_MS) — re-run later to watch the two transactions land`);
 else {
   console.log(`  … waiting up to 40s for the on-chain notice (record_capture → record_notice)`);
   let mine: any = null;

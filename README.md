@@ -299,7 +299,9 @@ no-network fallback), `SOLANA_CLUSTER` (the RPC URL follows unless
 `SERVICE_TOKEN`, `SERVICE_WS_URL`, `DEFAULT_CONSENT = blur`.
 Service flags: `service/.env.example` (`SERVICE_TOKEN`, `CORS_ORIGIN`,
 `ATTEST_INTERVAL_MS`, `ATTEST_HEARTBEAT`, `BADGE_KEYS_DIR`, `RADIO_SYNC_MS`,
-`NOTIFY_ON_CHAIN`, `CONTACTS_FILE`, `NOTICE_LOG`, …).
+`NOTIFY_ON_CHAIN`, `CONTACTS_FILE`, `NOTICE_LOG`, `NOTICE_MIN_INTERVAL_MS` — one
+on-chain notice per badge per minute; a badge that stays in frame keeps firing
+film-events for the alarm, and they are covered by that notice, …).
 
 ### Judge Q&A (built in, not just pitched)
 

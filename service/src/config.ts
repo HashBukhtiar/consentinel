@@ -72,6 +72,8 @@ export const config = {
   EMAIL_MODE: "dry-run" as const,
   /** Where composed emails and notice outcomes are appended (JSONL; holds addresses — gitignored dir). */
   NOTICE_LOG: abs(env("NOTICE_LOG", "../data/audit/notices.jsonl")),
+  /** One on-chain notice per badge per this window; film-events inside it are covered by the last notice (still audited + attested). */
+  NOTICE_MIN_INTERVAL_MS: Number(env("NOTICE_MIN_INTERVAL_MS", "60000")),
   MAX_PENDING_EVENTS: 500,
 };
 

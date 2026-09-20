@@ -13,7 +13,7 @@ const t = (unixSec: number) => new Date(unixSec * 1000).toLocaleTimeString();
 export function NoticeToasts() {
   const [items, setItems] = useState<NoticeMsg[]>([]);
   useEffect(() => operatorLink.subscribe((m) => {
-    if (m.type !== "notice") return;
+    if (m.type !== "notice" || m.stage === "coalesced") return; // covered by a toast already shown
     setItems((prev) => {
       const i = prev.findIndex((x) => x.eventId === m.eventId);
       const next = i >= 0 ? prev.map((x, k) => (k === i ? m : x)) : [m, ...prev];

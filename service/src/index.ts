@@ -99,7 +99,7 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
   const radioEv = radio.filmEvent(entry.beaconId); // CNSF<id> → the badge's red alarm
   chain.enqueue(entry);
   // filmed → told, both on-chain (two camera-signed transactions, off this request's path)
-  notifier.handle(entry, { radioDelivered: (radioEv?.delivered ?? 0) > 0 || delivery.delivered > 0, voice: voice.provider !== "none" });
+  const notice = notifier.handle(entry, { radioDelivered: (radioEv?.delivered ?? 0) > 0 || delivery.delivered > 0, voice: voice.provider !== "none" });
   // voice is async and never blocks the response
   voice.speak(say, entry.beaconId).then(
     (spoken) => broadcast({ type: "alert", beaconId: entry.beaconId, eventId: entry.eventId, text: spoken.text, provider: spoken.provider, audioUrl: spoken.audioUrl, cached: spoken.cached, playedLocally: config.PLAY_AUDIO_LOCALLY }),
@@ -113,7 +113,7 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
     badge: delivery,
     radio: radioEv ? { frame: radioEv.frame, delivered: radioEv.delivered, queued: radioEv.queued } : null,
     attest: chain.enabled ? "queued for next interval" : "disabled",
-    notice: notifier.enabled ? { stage: "queued", person: person?.name ?? null, email: config.EMAIL_MODE } : "disabled",
+    notice: notice.stage === "disabled" ? "disabled" : { stage: notice.stage, coveredBy: notice.coveredBy, person: person?.name ?? null, email: config.EMAIL_MODE },
   };
 }
 

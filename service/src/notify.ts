@@ -29,7 +29,7 @@ export interface Contact {
   email?: string;
 }
 
-export type NoticeStage = "queued" | "recorded" | "notified" | "unreachable" | "error";
+export type NoticeStage = "queued" | "recorded" | "notified" | "unreachable" | "coalesced" | "error";
 
 /** What the operator UI gets (broadcast at every stage change) and what NOTICE_LOG keeps. */
 export interface NoticeState {
@@ -45,6 +45,8 @@ export interface NoticeState {
   capture?: { signature: string; explorer: string; address: string; addressExplorer: string; recordedAt: number }; // unix s (chain clock)
   notice?: { signature: string; explorer: string; notifiedAt: number; channels: string[] }; // unix s (chain clock)
   email?: { to: string; subject: string; mode: "dry-run" | "sent"; at: number }; // `to` masked
+  /** `coalesced`: this film-event is covered by the notice filed for that earlier event (same badge, within NOTICE_MIN_INTERVAL_MS) */
+  coveredBy?: { eventId: string; at: number };
   error?: string;
 }
 
@@ -81,7 +83,8 @@ export class Notifier {
   private contacts = new Map<string, Contact>();
   private contactsMtime = -1;
   private recent: NoticeState[] = [];
-  private counts = { recorded: 0, notified: 0, unreachable: 0, errors: 0 };
+  private counts = { recorded: 0, notified: 0, unreachable: 0, coalesced: 0, errors: 0 };
+  private lastByBadge = new Map<string, { eventId: string; at: number }>(); // last notice filed per badge (coalescing window)
 
   constructor(
     private chain: Chain,
@@ -128,6 +131,7 @@ export class Notifier {
       enabled: this.enabled,
       onChain: config.NOTIFY_ON_CHAIN,
       emailMode: config.EMAIL_MODE,
+      minIntervalMs: config.NOTICE_MIN_INTERVAL_MS,
       contactsFile: config.CONTACTS_FILE,
       contacts: [...this.loadContacts().values()].map((c) => ({ badgeId: c.badgeId, name: c.name, email: c.email ? maskEmail(c.email) : null })),
       counts: { ...this.counts },
@@ -135,16 +139,54 @@ export class Notifier {
     };
   }
 
-  /** Fire-and-forget from the film-event handler; notices run one at a time so the RPC never sees a burst. */
-  handle(entry: AuditEntry, inputs: NoticeInputs): void {
+  /**
+   * Fire-and-forget from the film-event handler; notices run one at a time so
+   * the RPC never sees a burst. A badge that stays in frame fires a film-event
+   * every few seconds (the badge alarm needs that); the person needs ONE
+   * receipt for that, so events within NOTICE_MIN_INTERVAL_MS of the last
+   * notice filed for the same badge are coalesced onto it (still audited and
+   * attested like every film-event — just not a second on-chain notice).
+   */
+  handle(entry: AuditEntry, inputs: NoticeInputs): { stage: "queued" | "coalesced" | "disabled"; coveredBy?: { eventId: string; at: number } } {
+    if (!this.enabled) return { stage: "disabled" };
+    const last = this.lastByBadge.get(entry.beaconId);
+    if (last && entry.at - last.at < config.NOTICE_MIN_INTERVAL_MS) {
+      this.counts.coalesced++;
+      const st: NoticeState = {
+        type: "notice", at: Date.now(), stage: "coalesced", eventId: entry.eventId, beaconId: entry.beaconId, eventHash: entry.hash, cameraId: entry.cameraId,
+        filmedAt: entry.at, person: this.personOf(entry.beaconId), coveredBy: last,
+      };
+      this.broadcast({ ...st });
+      this.remember(st);
+      return { stage: "coalesced", coveredBy: last };
+    }
+    this.lastByBadge.set(entry.beaconId, { eventId: entry.eventId, at: entry.at });
     this.queue = this.queue.then(() => this.run(entry, inputs)).catch(() => {});
+    return { stage: "queued" };
+  }
+
+  private personOf(beaconId: string): NoticeState["person"] {
+    const c = this.contact(beaconId);
+    return c ? { name: c.name, email: c.email ? maskEmail(c.email) : undefined } : null;
+  }
+
+  /** Why an on-chain write failed, in words the operator can act on. */
+  private explain(e: unknown): string {
+    const m = (e as Error).message ?? String(e);
+    if (/InstructionFallbackNotFound|Fallback functions are not supported|invalid instruction data|101\b/.test(m)) {
+      return `the deployed program has no record_capture/record_notice yet — upgrade it: cd registry && npm run build && anchor deploy --provider.cluster ${config.SOLANA_CLUSTER}`;
+    }
+    if (/insufficient funds|insufficient lamports|Attempt to debit an account but found no record/i.test(m)) {
+      return `camera key ${this.chain.camera?.publicKey.toBase58() ?? ""} cannot pay the notice rent — cd registry && npm run seed (tops it up)`;
+    }
+    return m.split("\n")[0].slice(0, 160);
   }
 
   private async run(entry: AuditEntry, inputs: NoticeInputs): Promise<void> {
     const c = this.contact(entry.beaconId);
     const st: NoticeState = {
       type: "notice", at: Date.now(), stage: "queued", eventId: entry.eventId, beaconId: entry.beaconId, eventHash: entry.hash, cameraId: entry.cameraId,
-      filmedAt: entry.at, person: c ? { name: c.name, email: c.email ? maskEmail(c.email) : undefined } : null,
+      filmedAt: entry.at, person: this.personOf(entry.beaconId),
     };
     const emit = () => { st.at = Date.now(); this.broadcast({ ...st }); };
     emit();
@@ -152,6 +194,7 @@ export class Notifier {
       st.stage = "error";
       st.error = !this.chain.camera ? `no camera keypair (${config.CAMERA_KEYPAIR})` : !config.NOTIFY_ON_CHAIN ? "NOTIFY_ON_CHAIN is off" : "camera not registered on-chain — run `npm run seed` in registry/";
       this.counts.errors++;
+      this.lastByBadge.delete(entry.beaconId);
       emit(); this.remember(st);
       return;
     }
@@ -165,8 +208,9 @@ export class Notifier {
       emit();
     } catch (e) {
       st.stage = "error";
-      st.error = `record_capture failed: ${(e as Error).message.split("\n")[0].slice(0, 160)}`;
+      st.error = `record_capture failed: ${this.explain(e)}`;
       this.counts.errors++;
+      this.lastByBadge.delete(entry.beaconId); // nothing filed: the next film-event tries again
       this.log(`notice: ${st.error}`);
       emit(); this.remember(st);
       return;
@@ -198,7 +242,7 @@ export class Notifier {
       this.log(`notice: ${c ? c.name : `badge ${entry.beaconId}`} notified (${channelNames(channels).join(", ")}) → on-chain ${r.explorer}`);
     } catch (e) {
       st.stage = "error";
-      st.error = `record_notice failed: ${(e as Error).message.split("\n")[0].slice(0, 160)}`;
+      st.error = `record_notice failed: ${this.explain(e)}`;
       this.counts.errors++;
       this.log(`notice: ${st.error}`);
     }

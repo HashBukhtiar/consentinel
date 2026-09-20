@@ -176,7 +176,7 @@ export function OperatorPanel({ fps, source, tracks, events, beacons, debug, dec
               {n?.notice && (n.notice.explorer
                 ? <a href={n.notice.explorer} target="_blank" rel="noreferrer" title={`record_notice: told ${new Date(n.notice.notifiedAt * 1000).toLocaleTimeString()} via ${n.notice.channels.join(", ")}`}> · ✉ told ↗</a>
                 : <span className="muted"> · ✉ told</span>)}
-              {n && !n.notice && n.stage !== "error" && <span className="muted"> · {n.stage === "unreachable" ? "no contact on file" : n.stage === "recorded" ? "notifying…" : "filing…"}</span>}
+              {n && !n.notice && n.stage !== "error" && <span className="muted" title={n.stage === "coalesced" && n.coveredBy ? `covered by the notice filed for the film-event at ${new Date(n.coveredBy.at).toLocaleTimeString()}` : undefined}> · {n.stage === "unreachable" ? "no contact on file" : n.stage === "coalesced" ? `covered by ${n.coveredBy ? new Date(n.coveredBy.at).toLocaleTimeString() : "the last notice"}` : n.stage === "recorded" ? "notifying…" : "filing…"}</span>}
               {n?.stage === "error" && <span className="status err" title={n.error}> · notice failed</span>}
               {s?.attested && (s.attested.explorer
                 ? <a href={s.attested.explorer} target="_blank" rel="noreferrer" title={`anchored in commitment #${s.attested.count}`}> · #{s.attested.count} ↗</a>

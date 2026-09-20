@@ -13,7 +13,7 @@ import { flags } from "../config/flags";
 export interface NoticeMsg {
   type: "notice";
   at: number;
-  stage: "queued" | "recorded" | "notified" | "unreachable" | "error";
+  stage: "queued" | "recorded" | "notified" | "unreachable" | "coalesced" | "error";
   eventId: string;
   beaconId: string;
   eventHash: string;
@@ -23,6 +23,8 @@ export interface NoticeMsg {
   capture?: { signature: string; explorer: string; address: string; addressExplorer: string; recordedAt: number }; // unix s, chain clock
   notice?: { signature: string; explorer: string; notifiedAt: number; channels: string[] }; // unix s, chain clock
   email?: { to: string; subject: string; mode: string; at: number };
+  /** `coalesced`: covered by the notice filed for that earlier film-event of the same badge */
+  coveredBy?: { eventId: string; at: number };
   error?: string;
 }
 
