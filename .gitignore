@@ -2,3 +2,5 @@
 data/audit/
 # large test recordings (badge clips) — keep out of the repo
 Media/
+# 📸 diag snapshots from the capture app (frames of real people) — never commit
+data/diag/

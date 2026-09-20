@@ -6,6 +6,7 @@ import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
 import { chain, startConsent } from "../consent/store";
 import type { BeaconDebug } from "../decode/beacon";
+import { captureDiagnostic, sendDiagnostic } from "../diag/snapshot";
 import type { BeaconReading, FilmEvent, Track } from "../shared/schema";
 
 const PROC_WIDTHS = [480, 720, 960, 1280];
@@ -31,8 +32,17 @@ export function App() {
   function toggleComposite() { flags.COMPOSITE = flags.COMPOSITE === "frame" ? "faces" : "frame"; setComposite(flags.COMPOSITE); }
   const [procWidth, setProcWidth] = useState(flags.PROCESS_WIDTH);
   const [error, setError] = useState("");
+  const [diag, setDiag] = useState("");
 
   function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }
+  // Ship what the camera sees (frame + badge crops + classifier numbers) to the service's data/diag/.
+  async function snapshot() {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) { setDiag("start a camera/clip first"); return; }
+    setDiag("capturing 1.2 s…");
+    try { setDiag(await sendDiagnostic(await captureDiagnostic(v, flags.PROCESS_WIDTH, beacons, tracks))); }
+    catch (e) { setDiag(`diag failed: ${(e as Error).message}`); }
+  }
   function toggleOverlay() { flags.BEACON_DEBUG = !flags.BEACON_DEBUG; setOverlay(flags.BEACON_DEBUG); }
   function setWidth(w: number) { flags.PROCESS_WIDTH = w; setProcWidth(w); } // the loop reads it every frame
 
@@ -132,6 +142,7 @@ export function App() {
         <select value={procWidth} onChange={(e) => setWidth(Number(e.target.value))} title="decode/detect resolution — higher = badge readable from farther, costs CPU">
           {PROC_WIDTHS.map((w) => <option key={w} value={w}>{w}px</option>)}
         </select>
+        <button onClick={snapshot} title="save what the camera sees (full frame + badge crops + classifier numbers) to the service's data/diag/ for offline debugging">📸 diag</button>
         <label className="file">Load clip
           <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) begin(null, URL.createObjectURL(f), "Clip · fallback"); }} />
         </label>
@@ -139,6 +150,7 @@ export function App() {
       </div>
 
       {error && <div className="error">{error}</div>}
+      {diag && <div className="muted" style={{ marginBottom: 8 }}>diag: {diag}</div>}
 
       <div className="stage">
         <canvas ref={canvasRef} className="feed" />
