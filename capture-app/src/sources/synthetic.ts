@@ -1,4 +1,5 @@
-import { paintPatch, symbolColor, framePeriodSymbols } from "../decode/patch";
+import { paintPatch, symbolColor, framePeriodSymbols, paintKey } from "../decode/patch";
+import { flags } from "../config/flags";
 
 // Synthetic badge source: overlays REAL-format animated beacon patches onto a
 // base video (your webcam) and returns a MediaStream, so the optical decoder
@@ -46,9 +47,17 @@ export function startSynthetic(base: HTMLVideoElement, ids: number[] = [0x4e]): 
     ids.forEach((id, i) => {
       const px = Math.round(xs[i] * w - pw / 2), py = Math.round(h * 0.68);
       const img = ctx.createImageData(pw, ph);
-      paintPatch(img.data, pw, ph, { x: 0, y: 0, w: pw, h: ph }, symbolColor(id, SYNTH_OPT_IN, s));
+      // the static key (firmware 0.4.0) or, for the blink-era engines, the colour sequence
+      if (flags.BEACON_OPTICAL_MODE === "key") paintKey(img.data, pw, ph, { x: 0, y: 0, w: pw, h: ph }, id, SYNTH_OPT_IN);
+      else paintPatch(img.data, pw, ph, { x: 0, y: 0, w: pw, h: ph }, symbolColor(id, SYNTH_OPT_IN, s));
       ctx.putImageData(img, px, py);
     });
+    // The pipeline decodes once per NEW video frame (it fingerprints the pixels);
+    // a static key on a static background would look like one frame forever, so
+    // tick a strip along two edges every paint.
+    const tick = Math.round(performance.now() / 16) & 255;
+    ctx.fillStyle = `rgb(${tick},${tick},${tick})`;
+    ctx.fillRect(0, 0, w, 3); ctx.fillRect(0, 0, 3, h);
     pushFrame();
   };
   draw();

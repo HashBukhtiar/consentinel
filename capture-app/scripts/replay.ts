@@ -24,6 +24,23 @@ const load = (file: string, w: number, h: number): ImageData => {
   return { data: new Uint8ClampedArray(readFileSync(tmp).buffer.slice(0)), width: w, height: h } as unknown as ImageData;
 };
 
+if (flags.BEACON_OPTICAL_MODE === "key") {
+  // the static-key engine: per frame, the largest candidates with the decoder's own verdict
+  console.log(`${index.frames.length} frames, stored ${index.width}px wide, decoding at ${procW}x${procH} · engine key · MIN_W=${flags.KEY_MIN_W} MARGIN=${flags.KEY_MARGIN} CONFIRM_N=${flags.KEY_CONFIRM_N}`);
+  const dec = _internal.newKeyDecoder();
+  const seen = new Map<string, number>();
+  let firstAt = -1, ms = 0;
+  for (const fr of index.frames) {
+    const f = load(fr.file, procW, procH);
+    const out = dec.decode(f, fr.tMs);
+    ms += dec.debug.ms;
+    for (const r of out) { seen.set(r.beaconId, (seen.get(r.beaconId) ?? 0) + 1); if (firstAt < 0) firstAt = fr.tMs; }
+    const desc = dec.debug.candidates.filter((c) => !c.status.startsWith("too small")).slice(0, 3).map((c) => `${c.box.w}x${c.box.h} ${c.status}`);
+    console.log(`t=${String(fr.tMs).padStart(5)}  ${desc.join(" | ") || "-"}${out.length ? "   ⇒ " + out.map((r) => `${r.beaconId} ${r.optIn ? "OPT-IN" : "OPT-OUT"}`).join(",") : ""}`);
+  }
+  console.log(`\nreadings: ${[...seen.entries()].map(([id, n]) => `${id}×${n}`).join(", ") || "NONE"}${firstAt >= 0 ? ` (first at ${firstAt} ms)` : ""} · avg decode ${(ms / index.frames.length).toFixed(1)} ms`);
+  process.exit(0);
+}
 console.log(`${index.frames.length} frames, stored ${index.width}px wide, decoding at ${procW}x${procH} · WHITE_T=${flags.BEACON_WHITE_T} MIN_BORDER=${flags.BEACON_MIN_BORDER} MARGIN=${flags.BEACON_SYMBOL_MARGIN} CONFIRM_MS=${flags.BEACON_CONFIRM_MS}`);
 decoderStats.reset();
 const dec = _internal.newDecoder();

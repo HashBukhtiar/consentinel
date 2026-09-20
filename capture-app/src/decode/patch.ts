@@ -82,3 +82,44 @@ export function paintPatch(
   const bx = (BORDER_PX / PATCH.w) * rect.w, by = (BORDER_PX / PATCH.h) * rect.h;
   fill(data, W, H, rect.x + bx, rect.y + by, rect.w - 2 * bx, rect.h - 2 * by, color);
 }
+
+// ---- v3 static key (firmware 0.4.0) ---------------------------------------------
+import { KEY, SEG7, SEG_RECTS, keyDigits, MARK_OPT_IN, MARK_OPT_OUT } from "@shared/beacon";
+
+/**
+ * Paint the badge's beacon screen exactly as firmware 0.4.0 shows it: `rect`
+ * is the 320x240 screen. Black, the white bar to the right and below (the
+ * ring's other two edges are clipped on the badge — `ring: "full"` paints the
+ * unclipped ring the firmware intended), and the three 7-segment hex digits of
+ * id(8)<<4|crc4(id) in MINT (opt-in) or ROSE (opt-out), dimmed to `bright`%
+ * like the badge's UP/DOWN setting (default 75).
+ */
+export function paintKey(
+  data: Buf, W: number, H: number,
+  rect: { x: number; y: number; w: number; h: number },
+  id: number, optIn: boolean,
+  opts: { bright?: number; ring?: "clipped" | "full" } = {},
+) {
+  const sx = rect.w / PATCH.w, sy = rect.h / PATCH.h;
+  const b = (opts.bright ?? 75) / 100;
+  const dim = (c: RGB): RGB => [Math.round(c[0] * b), Math.round(c[1] * b), Math.round(c[2] * b)];
+  const white = dim(WHITE), on = dim(optIn ? MARK_OPT_IN : MARK_OPT_OUT), black: RGB = [0, 0, 0];
+  const at = (x: number, y: number, w: number, h: number, c: RGB) => fill(data, W, H, rect.x + x * sx, rect.y + y * sy, w * sx, h * sy, c);
+  at(0, 0, PATCH.w, PATCH.h, black);
+  if (opts.ring === "full") {
+    at(0, 0, PATCH.w, PATCH.h, white);
+    at(KEY.border, KEY.border, PATCH.w - 2 * KEY.border, PATCH.h - 2 * KEY.border, black);
+  } else {
+    at(KEY.barRight, KEY.pad, PATCH.w - KEY.barRight, PATCH.h - KEY.pad, white);
+    at(KEY.pad, KEY.barBottom, PATCH.w - KEY.pad, PATCH.h - KEY.barBottom, white);
+  }
+  const digits = keyDigits(id);
+  for (let k = 0; k < KEY.digits; k++) {
+    const mask = SEG7[digits[k]];
+    for (let s = 0; s < 7; s++) {
+      if (!(mask & (1 << s))) continue;
+      const r = SEG_RECTS[s];
+      at(KEY.x0 + k * KEY.pitch + r[0], KEY.y0 + r[1], r[2], r[3], on);
+    }
+  }
+}

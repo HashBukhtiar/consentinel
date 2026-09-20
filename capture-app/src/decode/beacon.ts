@@ -26,6 +26,7 @@ import type { BeaconReading, DecodeBeacons } from "../shared/schema";
 import { SAMPLE_BOX_FRAC } from "./patch";
 import { flags } from "../config/flags";
 import { SeqDecoder } from "./seq";
+import { KeyDecoder } from "./key";
 
 type Frame = ImageData; // uses only .data/.width/.height
 type Box = { x: number; y: number; w: number; h: number };
@@ -234,6 +235,7 @@ export interface BeaconDebug {
   candidates: { box: Box; borderLum: number; confident: boolean; symbol: number | null; label?: string }[];
   tracks: { cx: number; cy: number; lastId: number | null; sinceDecodeMs: number; missed: number }[];
   bright: number; // fraction of pixels passing the whiteness mask (0..1) — ~0 ⇒ ring too dim / too far
+  ms?: number; // decode time this frame (key engine)
 }
 export let lastDebug: BeaconDebug = { width: 0, height: 0, candidates: [], tracks: [], bright: 0 };
 
@@ -308,10 +310,25 @@ function nearest(set: Iterable<PatchTrack>, cx: number, cy: number, maxPx: numbe
 }
 
 // ---- engine selection ------------------------------------------------------------
-// The seq decoder is the one that works on a real webcam (see seq.ts); the
-// colour decoder stays available for the tune page, the sweep and A/B tests.
+// "key" (default) reads the STATIC KEY firmware 0.4.0 shows — three 7-segment
+// hex digits, one frame is enough (see key.ts). The two blink-era engines stay
+// selectable for old recordings, the tune page and the sweep.
 const colorDecoder = new BeaconDecoder();
 const seqDecoder = new SeqDecoder();
+const keyDecoder = new KeyDecoder();
+
+function keyDecode(frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] {
+  const out = keyDecoder.decode(frame, tMs, sampler);
+  const d = keyDecoder.debug;
+  // the overlay draws every candidate; specks would only clutter it
+  const shown = d.candidates.filter((c) => !c.status.startsWith("too small")).slice(0, 8);
+  lastDebug = {
+    width: d.width, height: d.height, bright: 0, ms: d.ms,
+    candidates: shown.map((c) => ({ box: c.fit ? c.fit.key : c.box, borderLum: 0, confident: !!c.fit, symbol: null, label: c.status })),
+    tracks: d.tracks.map((t) => ({ cx: t.cx, cy: t.cy, lastId: t.lastId, sinceDecodeMs: t.sinceDecodeMs, missed: t.missed })),
+  };
+  return out;
+}
 
 function seqDecode(frame: ImageData, tMs: number): BeaconReading[] {
   const out = seqDecoder.decode(frame, tMs);
@@ -325,7 +342,9 @@ function seqDecode(frame: ImageData, tMs: number): BeaconReading[] {
 }
 
 export const decodeBeacons = (frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] =>
-  flags.BEACON_OPTICAL_MODE === "seq" ? seqDecode(frame, tMs) : colorDecoder.decode(frame, tMs, sampler);
+  flags.BEACON_OPTICAL_MODE === "key" ? keyDecode(frame, tMs, sampler)
+    : flags.BEACON_OPTICAL_MODE === "seq" ? seqDecode(frame, tMs)
+      : colorDecoder.decode(frame, tMs, sampler);
 
 /** A COLOUR decoder with its own patch-track state — for the offline sweep, which
  *  models the colour path and must not leak state between trials. */
@@ -338,7 +357,8 @@ export function createDecoder(): DecodeBeacons {
 export const _internal = {
   locatePatches, sampleSymbol, scanComponents,
   newDecoder: (): { decode: (f: ImageData, tMs: number, sampler?: RegionSampler) => BeaconReading[] } =>
-    flags.BEACON_OPTICAL_MODE === "seq" ? new SeqDecoder() : new BeaconDecoder(),
+    flags.BEACON_OPTICAL_MODE === "key" ? new KeyDecoder() : flags.BEACON_OPTICAL_MODE === "seq" ? new SeqDecoder() : new BeaconDecoder(),
   newColorDecoder: () => new BeaconDecoder(),
   newSeqDecoder: () => new SeqDecoder(),
+  newKeyDecoder: () => new KeyDecoder(),
 };

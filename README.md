@@ -3,9 +3,9 @@
 **Your face, your rules — enforced by light and owned on-chain.**
 
 A consent-respecting video-capture pipeline for Hack the North 2026. HTN badges
-blink a coded light beacon carrying a short id; the capture app decodes the
-beacons from the video, associates each with the nearest face, and **blurs
-everyone who has not opted in**. Each person's consent is a **signed,
+show a coded light key carrying a short id; the capture app reads the keys
+from the video, associates each with the nearest face, and **blurs everyone
+who has not opted in**. Each person's consent is a **signed,
 revocable record they own on Solana**. When an opted-out person is captured,
 their badge buzzes and an ElevenLabs voice tells them.
 
@@ -44,9 +44,12 @@ that commits to the off-chain film-event log).
                                         attest_capture every 10 s (hash of the film-event log, or heartbeat)
 ```
 
-1. **Badge → camera (light).** The badge blinks its 8-bit id (`4E`). The app's
-   optical decoder (`capture-app/src/decode/beacon.ts`) finds the patch, decodes
-   the id with A's `decodeFrame`, and binds it to the nearest face above.
+1. **Badge → camera (light).** The badge shows a STATIC key: three giant
+   7-segment hex digits, `id(8) << 4 | crc4(id)` (id `27` shows `271`), MINT
+   for opt-in and ROSE for opt-out, with a white bar to the right and below.
+   The app's decoder (`capture-app/src/decode/key.ts`) finds the digits, fits
+   the grid, reads all three, checks the CRC, and binds the id to the nearest
+   face above. One clean frame is enough; nothing blinks.
 2. **Camera → chain (read).** The face is clear only if the chain-synced cache
    says that id is `opt_in`. Unknown, stale, no badge ⇒ blur.
 3. **Camera → service (FilmEvent).** An opted-out person on camera fires a
@@ -76,27 +79,31 @@ scripts/dev.sh                # service (:8787) + capture app (:5173), Ctrl+C st
 
 Then, in order:
 
-1. **Badge** — push `firmware/consentinel-beacon.min.lua` to the HTN badge
+1. **Badge** — push `firmware/consentinel-beacon.lua` to the HTN badge
    (`firmware/README.md` §2), open *Consentinel*. The CONFIG screen shows the
-   wearer's `ID` (two hex digits, e.g. `3D`) and `OPT-IN`/`OPT-OUT`; **A**
-   toggles consent, **START arms the beacon** (full-screen white ring around a
-   colour-blinking block; any key returns to CONFIG). Any badge works: the
-   first time a camera sees an id with no record, the service registers it as
-   `opt_out` (organizer key), so its card appears in the panel within a few
-   seconds. No badge? **Synthetic badge** in the app paints a real-format `4E`
-   beacon (works without a camera too).
+   wearer's `KEY` (three hex digits, e.g. `271` = id `27` + CRC nibble) and
+   `OPT-IN`/`OPT-OUT`; **A** toggles consent, **START arms the beacon** (the
+   three giant digits; UP/DOWN dims them, any other key returns to CONFIG;
+   **LEFT** turns the six LEDs off — do that if their glare lands on the
+   screen). Any badge works: the first time a camera sees an id with no
+   record, the service registers it as `opt_out` (organizer key), so its card
+   appears in the panel within a few seconds. No badge? **Synthetic badge** in
+   the app paints a real-format `4E` key (works without a camera too).
 2. **Capture app** — http://localhost:5173 → **Use camera** (decoder is
    *optical* by default; the header button flips to *stub* = fake beacons).
    Hold the badge **just below your chin, screen square to the camera**, with
-   the beacon ARMED (START): the white ring must be ≥ 22 px wide in the
-   processing frame — roughly ≤ 0.9 m from a laptop webcam at 720 px (pick
-   **1280px** in the header for more). A frame is 9 colour symbols ≈ 0.9 s and
-   an id must repeat twice, so hold still ~2–3 s for the first lock. With
-   **overlay: on** the feed shows what the decoder sees — red box = ring found
-   but too small / too dim / clipped to white / no clear colour, yellow =
-   reading, green `badge 3D · OPT-OUT → T1` = decoded and bound to the face
-   above it — and the **Beacons** panel says why nothing decodes. Then the
-   track row shows the id, consent from devnet, and the face blurs (opt_out).
+   the beacon ARMED (START). The three digits must be ≥ 18 px wide in the
+   processing frame; the decoder is reliable from ~32 px — roughly ≤ 1 m from
+   a laptop webcam at **1280px** (the default; 720 px halves that). A lock
+   takes two consecutive frames (~100 ms). With **overlay: on** the feed shows
+   what the decoder sees — a red box with its verdict on every candidate
+   (`mint blob, no key read (24 px)` = too small / not square to the camera),
+   green `badge 27 · OPT-IN → T1` = decoded and bound to the face above it —
+   and the **Beacons** panel says why nothing decodes. Then the track row
+   shows the id, consent from devnet, and the face blurs (opt_out). Something
+   off? **🎥 4s** records four seconds of frames to `data/diag/` and
+   `npx tsx scripts/replay.ts ../data/diag/<ts>-seq` replays the real decoder
+   over them, frame by frame.
 3. **The on-stage beat** — press **A on the badge** (any key leaves the
    beacon; toggle, then START again). The light now carries the wearer's
    choice: an OPT-OUT blurs the face on the very next frame (restrict-only,

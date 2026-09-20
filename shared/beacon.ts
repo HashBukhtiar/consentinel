@@ -407,3 +407,119 @@ export function beaconIdFromBadgeId(badgeId: string): number {
   }
   return ((h >>> 24) ^ (h >>> 16) ^ (h >>> 8) ^ h) & 0xff;
 }
+
+// =============================================================================
+// v3 — STATIC KEY (firmware 0.4.0, PR #10). This is what the badge shows now.
+// =============================================================================
+//
+// The beacon screen no longer blinks. It shows ONE static picture the camera
+// reads from a single frame: a white ring and three giant 7-segment hex digits
+// on black. No timing, no clock recovery, no frame assembly — a dropped frame
+// costs nothing and a badge locks on the first clean frame.
+//
+//   key = id(8) << 4 | crc4(id)          three hex digits, MSB first
+//   e.g. id 0x27 → crc4 = 0x1 → "271"     (the photo in the PR)
+//
+// The DIGIT COLOUR carries consent: MINT (MARK_OPT_IN) = opt-in, ROSE
+// (MARK_OPT_OUT) = opt-out. Still restrict-only on the capture side.
+//
+// Everything below MUST match firmware/consentinel-beacon.lua (D_*, SEG, crc4,
+// BORDER, PAD). A one-value disagreement means every badge stays blurred.
+
+/**
+ * Screen geometry as the camera SEES it, in badge pixels (320x240 screen).
+ *
+ * The firmware builds the beacon inside a widget that sits at the root's
+ * padding (PAD = 30) and CLIPS its children, so the white ring's top and left
+ * edges (drawn at -PAD) are cut off: what is visible is an L — a white bar on
+ * the RIGHT (x 296..320) and along the BOTTOM (y 216..240) — and the three
+ * digit cells at x = 32 + 90k, y = 40 (76x160 each, 14 px apart). The decoder
+ * only needs the digits; the bars are a bonus. If the firmware later escapes
+ * the clip, the full ring appears and nothing here has to change.
+ */
+export const KEY = {
+  pad: 30, // root padding the beacon widget sits at (screen origin of the visible key area)
+  border: 24, // ring thickness (= BORDER in the firmware; = BORDER_PX above)
+  digits: 3,
+  w: 76, // digit cell width
+  h: 160, // digit cell height
+  t: 18, // segment thickness
+  gap: 14, // between cells
+  half: 53, // vertical segment length: (h - 3t) / 2
+  x0: 32, // screen x of cell 0 (pad + (272 - 256) / 2)
+  y0: 40, // screen y of every cell (pad + (192 - 160) / 2)
+  pitch: 90, // w + gap
+  span: 256, // 3 cells + 2 gaps
+  barRight: 296, // visible white bar: x 296..320, y 30..240
+  barBottom: 216, // visible white bar: y 216..240, x 30..320
+} as const;
+
+/**
+ * 7-segment patterns for hex digits 0..F. Bit 1 a(top) 2 b(top-right)
+ * 4 c(bottom-right) 8 d(bottom) 16 e(bottom-left) 32 f(top-left) 64 g(middle).
+ * MUST match SEG in the firmware. All 16 values are distinct.
+ */
+export const SEG7: readonly number[] = [
+  0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, // 0 1 2 3 4 5 6 7
+  0x7f, 0x6f, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71, // 8 9 A b C d E F
+];
+export const SEG_A = 1, SEG_B = 2, SEG_C = 4, SEG_D = 8, SEG_E = 16, SEG_F = 32, SEG_G = 64;
+
+/**
+ * Each segment's rectangle inside its cell, in cell units (x, y, w, h), index
+ * 0..6 = a..g. Mirrors seg_geom() in the firmware exactly.
+ */
+export const SEG_RECTS: readonly (readonly [number, number, number, number])[] = (() => {
+  const { w: W, h: H, t: T, half: Hf } = KEY;
+  return [
+    [T, 0, W - 2 * T, T], // a top
+    [W - T, T, T, Hf], // b top-right
+    [W - T, 2 * T + Hf, T, Hf], // c bottom-right
+    [T, H - T, W - 2 * T, T], // d bottom
+    [0, 2 * T + Hf, T, Hf], // e bottom-left
+    [0, T, T, Hf], // f top-left
+    [T, T + Hf, W - 2 * T, T], // g middle
+  ];
+})();
+
+/** Hex digit for a lit-segment mask, or null when no digit lights exactly that set. */
+export function digitFromSegments(mask: number): number | null {
+  const i = SEG7.indexOf(mask & 0x7f);
+  return i < 0 ? null : i;
+}
+
+/**
+ * CRC-4, polynomial x^4 + x + 1 (0b10011). Mirrors crc4() in the firmware —
+ * NON-augmented, over the 8 id bits, exactly as the badge computes it.
+ */
+export function crc4(value: number, nbits: number): number {
+  let reg = 0;
+  for (let i = nbits - 1; i >= 0; i--) {
+    const top = (reg >> 3) & 1;
+    reg = ((reg << 1) | ((value >> i) & 1)) & 0xf;
+    if (top === 1) reg ^= 0x3;
+  }
+  return reg & 0xf;
+}
+
+/** The 12-bit key the badge shows for `id`: id(8) << 4 | crc4(id). */
+export function packKey(id: number): number {
+  return ((id & 0xff) << 4) | crc4(id & 0xff, ID_BITS);
+}
+
+/** id from a 12-bit key, or null when the CRC nibble does not match ⇒ blur. */
+export function unpackKey(key: number): number | null {
+  const id = (key >> 4) & 0xff;
+  return crc4(id, ID_BITS) === (key & 0xf) ? id : null;
+}
+
+/** The three hex digits (0..15) the badge draws for `id`, left to right. */
+export function keyDigits(id: number): [number, number, number] {
+  const k = packKey(id);
+  return [(k >> 8) & 0xf, (k >> 4) & 0xf, k & 0xf];
+}
+
+/** Key text as the badge's CONFIG screen prints it, e.g. "271". */
+export function keyText(id: number): string {
+  return keyDigits(id).map((d) => d.toString(16).toUpperCase()).join("");
+}

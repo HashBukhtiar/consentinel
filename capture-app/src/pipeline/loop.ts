@@ -103,7 +103,9 @@ export class Pipeline {
       const vW = v.videoWidth, vH = v.videoHeight;
       const sw = Math.round(nw * vW), sh = Math.round(nh * vH);
       if (sw < 8 || sh < 4) return null;
-      const dw = Math.min(320, sw), dh = Math.min(200, sh);
+      // cap the crop, keeping its aspect (a stretched crop would mis-place every segment sample)
+      const k = Math.min(1, 480 / sw, 320 / sh);
+      const dw = Math.max(1, Math.round(sw * k)), dh = Math.max(1, Math.round(sh * k));
       this.sampleCanvas.width = dw; this.sampleCanvas.height = dh;
       sctx.drawImage(v, nx * vW, ny * vH, sw, sh, 0, 0, dw, dh);
       return sctx.getImageData(0, 0, dw, dh);
@@ -236,9 +238,13 @@ function drawOverlay(
     for (const t of dbg.tracks) {
       if (t.lastId === null) label(t.cx * sx - 30, t.cy * sy + 18, "reading…", "#f5b942");
     }
-    const seq = flags.BEACON_OPTICAL_MODE === "seq";
-    const hud = `decode ${dbg.width}px · ${seq ? "seq" : "colour"} · ${dbg.candidates.length} blinking region${dbg.candidates.length === 1 ? "" : "s"}` +
-      (dbg.candidates.length === 0 ? (seq ? " — nothing blinking: START the beacon, hold it still, closer" : (dbg.bright < 0.002 ? " — no bright ring: closer / START the beacon / dimmer room" : " — bright blobs but none 4:3 with a white ring")) : "");
+    const mode = flags.BEACON_OPTICAL_MODE;
+    const n = dbg.candidates.length;
+    const noun = mode === "key" ? "key candidate" : "blinking region";
+    const none = mode === "key" ? " — no badge key in frame: START the beacon (three big digits), face the camera, closer"
+      : mode === "seq" ? " — nothing blinking: START the beacon, hold it still, closer"
+        : (dbg.bright < 0.002 ? " — no bright ring: closer / START the beacon / dimmer room" : " — bright blobs but none 4:3 with a white ring");
+    const hud = `decode ${dbg.width}px · ${mode} · ${n} ${noun}${n === 1 ? "" : "s"}${n === 0 ? none : ""}${dbg.ms !== undefined ? ` · ${dbg.ms.toFixed(0)} ms` : ""}`;
     label(8, H - 8, hud, "#e6ebf5");
   }
   if (dbg && dbg.width) {

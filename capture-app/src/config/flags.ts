@@ -53,7 +53,41 @@ export const flags = {
   // calibration — the only thing that worked on a real webcam, see
   // src/decode/seq.ts). "color": Maaz's absolute-colour classifier (what the
   // sweep models; needs a resolvable white ring and an sRGB-like panel).
-  BEACON_OPTICAL_MODE: (env.VITE_BEACON_OPTICAL_MODE ?? "seq") as "seq" | "color",
+  // "key": the STATIC KEY the badge shows since firmware 0.4.0 — three giant
+  // 7-segment hex digits read from a single frame (src/decode/key.ts). The two
+  // blink-era engines stay selectable for old recordings and the sweep.
+  BEACON_OPTICAL_MODE: (env.VITE_BEACON_OPTICAL_MODE ?? "key") as "key" | "seq" | "color",
+  // key decoder knobs (units: channel values 0..255 unless noted)
+  KEY_CHROMA_T: 40, // a lit pixel is chromatic: (G+B)/2−R (mint) or (R+B)/2−G (rose) at least this
+  KEY_TOPHAT_T: 25, // …and this much MORE chromatic than its surroundings (kills LED flare, coloured cloth, the badge's own glow)
+  KEY_LIT_MIN: 90, // …and bright: brightest channel at least this
+  KEY_WIN_DIV: 140, // top-hat half-window = frame width / this (9 px at 1280; a segment is thinner than that beyond ~40 cm)
+  KEY_MIN_PX: 3, // smallest component kept
+  KEY_MERGE_GAP: 0.8, // a component joins a cluster when the VERTICAL gap to a member ≤ this × the smaller one's size ('1' = two bars 18 units apart over 53-unit bars; the mask erodes bar ends, so the gap reads ~28)
+  KEY_MERGE_GAP_X: 2.0, // …and the HORIZONTAL gap ≤ this × that size (a '1' lights only its right bars: 72 units from the digit before it, over bars that erode to ~40 units far away)
+  KEY_MERGE_FLOOR_PX: 1.5, // …or when they all but touch (blur-broken corners)
+  KEY_MERGE_REACH_H: 0.75, // horizontal reach never exceeds this × the cluster's height (90 units over a 124–160-unit digit)
+  KEY_MERGE_CLUSTER_FRAC: 0.25, // …or within this × the cluster's height (the pieces of a hollowed-out bar close up; an LED is ≥ 0.66 heights above/below)
+  KEY_MERGE_LIT_TOL: 0.10, // …and only if its lit level is within this fraction of the cluster's (segments are uniform; flare and glow are dimmer)
+  KEY_THIN_PX: 6, // parts thinner than this (far bars) get the looser band below: their mean is dragged down by edge pixels
+  KEY_MERGE_LIT_TOL_THIN: 0.3,
+  KEY_MIN_W: 18, // smallest lit extent worth a fit, px at PROCESS_WIDTH (256 units ⇒ a segment is ~1.3 px)
+  KEY_ASPECT_MIN: 0.8, // lit extent aspect: 180..256 wide over 124..160 tall, ±30% perspective
+  KEY_ASPECT_MAX: 2.8,
+  KEY_STRETCH_MIN: 0.6, // x-scale over y-scale a hypothesis may imply (yaw foreshortening)
+  KEY_STRETCH_MAX: 1.6,
+  KEY_MIN_CONTRAST: 40, // lit − dark, in the digit's channel
+  KEY_DARK_MAX_FRAC: 0.6, // the always-dark spots must read below this × lit
+  KEY_SAMPLE_FRAC: 0.3, // half-size of a sample box as a fraction of the segment thickness
+  KEY_REFINE_FROM: -0.1, // refine a placement only if it starts at least this well (below: not even roughly right)
+  KEY_REFINE_FINE_FROM: 0.08, // …and run the half-pixel phase only from here
+  KEY_REFINE_ITERS: 8, // coordinate-descent steps per phase (1 px, then 0.5 px) per edge
+  KEY_MARGIN: 0.2, // every sample at least this far (× contrast) from the lit/dark midpoint
+  KEY_RIVAL_FRAC: 0.7, // a second id whose margin is ≥ this × the best one's ⇒ ambiguous ⇒ no reading
+  KEY_TRIM_MAX: 6, // when a cluster fails to fit, peel up to this many brightness-deviant members (one at a time) and retry (junk stuck to the key)
+  KEY_TRIM_CANDIDATES: 3, // …but only for the largest few clusters per frame (a retry is a full fit)
+  KEY_FINE_BELOW_PX: 240, // fit on a native-res crop when the lit extent is narrower than this (coarse px)
+  KEY_CONFIRM_N: 2, // decodes of the same id+consent within BEACON_CONFIRM_MS before it is reported
   // seq decoder knobs (measured on data/diag 2026-09-20, 1.5 m, 20 fps):
   SEQ_DIFF_T: 60, // sum |ΔR|+|ΔG|+|ΔB| between consecutive frames that counts as "changed" (badge symbol changes measure 40–400; sensor noise ~20)
   SEQ_MIN_W: 8, // smallest blinking rectangle worth tracking, px at PROCESS_WIDTH (~3 m at 1280)

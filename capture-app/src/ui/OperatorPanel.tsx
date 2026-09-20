@@ -55,6 +55,12 @@ export function OperatorPanel({ fps, source, tracks, events, beacons, debug, dec
   const beaconHint = (): string | null => {
     if (decoder === "stub" || beacons.length || !debug || !debug.width) return null;
     const cands = debug.candidates;
+    if (flags.BEACON_OPTICAL_MODE === "key") {
+      if (!cands.length) return `no badge key in frame — press START on the badge (its screen shows three big digits), face it to the camera, come closer (the digits must be ≥ ${flags.KEY_MIN_W} px wide here — about 1 m at 1280 px)`;
+      const best = cands.reduce((a, b) => (b.box.w > a.box.w ? b : a));
+      if (best.confident) return `key read (${best.label}) — confirming on the next frame`;
+      return `${best.label} — hold the badge still and square to the camera; if it stays unread, come closer or raise the decode resolution`;
+    }
     if (flags.BEACON_OPTICAL_MODE === "seq") {
       if (!cands.length) return "nothing blinking in frame — press START on the badge (beacon screen), hold it still, bring it closer";
       const best = cands.reduce((a, b) => (b.box.w > a.box.w ? b : a));
