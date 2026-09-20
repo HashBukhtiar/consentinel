@@ -15,8 +15,17 @@
 /** Patch position and size on the badge's 320x240 screen. */
 export const PATCH = { x: 8, y: 6, w: 304, h: 132 } as const;
 
-/** Always-lit white frame around the patch. This is the localization anchor. */
-export const BORDER_PX = 5;
+/**
+ * Always-lit white frame around the patch — the localization anchor, and the
+ * first thing to fail as the badge gets further away: a thin border is barely
+ * one camera pixel after downscaling, blurs into the background, and the
+ * decoder never finds the patch at all.
+ *
+ * 5 -> 14 took the smallest decodable patch from 70px to 22px and blur
+ * tolerance from 0 to 2 (capture-app/test/sweep.mts). MUST match BORDER in
+ * firmware/consentinel-beacon.lua.
+ */
+export const BORDER_PX = 14;
 
 export const COLS = 3;
 export const ROWS = 2;

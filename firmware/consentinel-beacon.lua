@@ -42,7 +42,14 @@ local SCREEN_H = badge.ui.screen_height
 
 local PATCH_X, PATCH_Y = 8, 6
 local PATCH_W, PATCH_H = 304, 132
-local BORDER = 5
+-- 14, not 5. The border is the localization anchor, and it is the first
+-- thing to die when the patch shrinks in frame: at 5px it is barely one
+-- camera pixel thick after downscaling, so it blurs into the background and
+-- the decoder never finds the patch at all. Widening it takes the smallest
+-- decodable patch from 70px to 22px (see capture-app/test/sweep.mts), which
+-- is the difference between a 0.3 m and a 0.9 m demo. Costs 9px of cell
+-- height. MUST match BORDER_PX in shared/beacon.ts.
+local BORDER = 14
 local COLS, ROWS = 3, 2
 local CELL_W = (PATCH_W - 2 * BORDER) // COLS
 local CELL_H = (PATCH_H - 2 * BORDER) // ROWS
