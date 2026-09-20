@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "sweep": "tsx test/sweep.mts",
     "test": "tsx test/safety.test.ts && tsx test/logic.test.ts && tsx test/decode.test.ts",
     "typecheck": "tsc --noEmit"
   },

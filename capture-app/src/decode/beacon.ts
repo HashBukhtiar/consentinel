@@ -231,5 +231,12 @@ function nearest(set: Iterable<PatchTrack>, cx: number, cy: number, maxPx: numbe
 const decoder = new BeaconDecoder();
 export const decodeBeacons: DecodeBeacons = (frame, tMs) => decoder.decode(frame, tMs);
 
+/** A decoder with its own patch-track state — for the offline sweep, which
+ *  runs hundreds of independent trials and must not leak state between them. */
+export function createDecoder(): DecodeBeacons {
+  const d = new BeaconDecoder();
+  return (frame, tMs) => d.decode(frame, tMs);
+}
+
 // exported for the self-check
 export const _internal = { locatePatches, sampleCells, scanComponents };

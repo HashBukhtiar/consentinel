@@ -97,7 +97,7 @@ and therefore "blur".
 Constants live in [`shared/beacon.ts`](../shared/beacon.ts) and are mirrored in
 the Lua source. **Change both in the same commit.**
 
-The patch sits at (8, 6), 304×132, with an **always-lit 5 px white border**.
+The patch sits at (8, 6), 304×132, with an **always-lit 14 px white border**.
 That border is the localization anchor: find the bright quad, rectify it,
 sample the cells inside. It also gives you the beacon's image position for the
 nearest-face-above association in spec §7.
@@ -141,6 +141,34 @@ The start bit and stop half pin both sync runs to **exactly** three, so
 
 Use MODE S to get a decoder working in twenty minutes, then move to MODE P for
 the 10× latency improvement. The app switches live with START.
+
+### Why the border is 14 px and not 5
+
+The border is the localization anchor, and it is the **first** thing to fail as
+the badge moves away from the camera — not the cells. After the frame is
+downscaled to `PROCESS_WIDTH`, a 5 px border is roughly one camera pixel; box
+blur then averages it against the dark background, it drops under
+`BEACON_BRIGHT_T`, and the connected-component search never finds the patch at
+all. The cells are still perfectly legible at that distance. You just can't get
+to them.
+
+Measured with `capture-app/test/sweep.mts`, which renders the real patch
+through a model of what a webcam does to it (scale, defocus, dim screen, glare,
+sensor noise) and runs the real decoder over the result:
+
+| border | smallest decodable patch | blur tolerated | range @60° FOV |
+|---|---|---|---|
+| 5 px | 70 px | 0 | ~0.3 m |
+| **14 px** | **22 px** | **3** | **~0.9 m** |
+| 18 px | 18 px | 3 | ~1.1 m |
+
+Cost is 9 px of cell height (61 → 52). Worth it three times over. 18 px buys a
+little more if you need it; a taller patch (304×200) adds blur tolerance but no
+extra range, because width is what the localizer is limited by.
+
+Run `npm run sweep` after any geometry change. **`BORDER` here and `BORDER_PX`
+in `shared/beacon.ts` must change in the same commit** — a mismatch means the
+decoder samples the wrong cells and every read fails CRC.
 
 ### Timing notes for the decoder
 

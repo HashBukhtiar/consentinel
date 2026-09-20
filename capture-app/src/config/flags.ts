@@ -36,7 +36,7 @@ export const flags = {
   BEACON_MIN_BORDER: 110, // min border luma for a confident sample (real screen ≈ 190-210)
   BEACON_ASPECT_MIN: 1.5, // patch aspect ≈ 304/132 = 2.3
   BEACON_ASPECT_MAX: 3.2,
-  BEACON_MIN_W: 22, // min patch width in px at PROCESS_WIDTH
+  BEACON_MIN_W: 14, // min patch width in px at PROCESS_WIDTH (decoder floor is ~22; leave headroom)
   BEACON_CELL_LIT_FRAC: 0.5, // cell lit if lum > frac × borderLum
   BEACON_CONTRAST_FRAC: 0.12, // min |cellLum − threshold| / borderLum to trust the read
   BEACON_MATCH_PX: 64, // patch-tracking match radius across frames (scales with PROCESS_WIDTH)
