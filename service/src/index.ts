@@ -8,8 +8,11 @@
 //   POST /consent/delegated       badge-signed consent update, relayed on-chain (signature-verified; open)
 //   GET  /audit/events?badge=A1B2 the off-chain log (Bearer SERVICE_TOKEN if set) — for the audit layer
 //   GET  /audit/verify            local log recomputed vs on-chain head (hashes only; open)
-//   WS   /badge?id=A1B2           badge push transport
-//   WS   /operator                capture-app UI feed (alerts, attestations)
+//   WS   /badge?id=A1B2           badge push transport (JSON; for a Wi-Fi bridge/dev board)
+//   WS   /bridge                  radio bridge: CNS* text frames both ways (see BADGE_PROTOCOL.md)
+//   GET  /bridge/pending          radio bridge poll transport (drains queued CNSF/CNSC frames)
+//   POST /bridge/uplink           radio bridge: a CNSR<id><0|1> heard on the air → badge-signed on-chain update
+//   WS   /operator                capture-app UI feed (alerts, attestations, radio frames)
 //   GET  /audio/<file>.mp3        ElevenLabs output
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
@@ -20,6 +23,7 @@ import { AuditLog, isFilmEvent, type AuditEntry, type Batch } from "./audit";
 import { BadgeHub, norm } from "./badges";
 import { Voice, alertText } from "./voice";
 import { Chain, HttpError } from "./chain";
+import { RadioBridge } from "./radio";
 import { explorerUrl } from "../../registry/client/src/core";
 
 const log = (m: string) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
@@ -52,6 +56,25 @@ const chain = new Chain(
 );
 await chain.init();
 
+// Badge radio (A ↔ C): film-events go down as CNSF, every on-chain consent
+// change goes down as CNSC, and a CNSR request from the badge's A button comes
+// up and becomes a badge-signed, relayed transaction.
+const radio = new RadioBridge(chain, broadcast, log);
+radio.start(config.RADIO_SYNC_MS);
+let logsSubscribed = false;
+try {
+  chain.reg.onLogs((n) => {
+    if (n.err) return;
+    for (const ev of n.events) {
+      if (ev.name === "ConsentChanged") radio.consentPush(ev.badgeId, ev.consent, { why: ev.delegated ? "chain: badge-signed update" : "chain: owner update" });
+      else if (ev.name === "ConsentClosed") radio.consentPush(ev.badgeId, false, { force: true, why: "chain: record closed ⇒ blur" });
+    }
+  });
+  logsSubscribed = true;
+} catch (e) {
+  log(`log subscription unavailable (${(e as Error).message}); radio mirror falls back to the periodic sync`);
+}
+
 const startedAt = Date.now();
 let received = 0;
 
@@ -63,6 +86,7 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
   const entry = audit.append(ev);
   const say = alertText(entry.beaconId, entry.cameraId);
   const delivery = badges.send(entry.beaconId, { type: "filmed", beaconId: entry.beaconId, at: entry.at, cameraId: entry.cameraId, buzzMs: 600, say });
+  const radioEv = radio.filmEvent(entry.beaconId); // CNSF<id> → the badge's red alarm
   chain.enqueue(entry);
   // voice is async and never blocks the response
   voice.speak(say, entry.beaconId).then(
@@ -70,7 +94,14 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
     (err) => broadcast({ type: "alert-error", beaconId: entry.beaconId, error: String(err?.message ?? err) }),
   );
   broadcast({ type: "film-event", entry, delivery });
-  return { ok: true, seq: entry.seq, hash: entry.hash, badge: delivery, attest: chain.enabled ? "queued for next interval" : "disabled" };
+  return {
+    ok: true,
+    seq: entry.seq,
+    hash: entry.hash,
+    badge: delivery,
+    radio: radioEv ? { frame: radioEv.frame, delivered: radioEv.delivered, queued: radioEv.queued } : null,
+    attest: chain.enabled ? "queued for next interval" : "disabled",
+  };
 }
 
 function health() {
@@ -97,6 +128,7 @@ function health() {
     attest: a,
     relayer: chain.relayer?.publicKey.toBase58() ?? null,
     badges: badges.status(),
+    radio: { ...radio.status(), logsSubscribed, syncMs: config.RADIO_SYNC_MS },
     operators: operators.size,
   };
 }
@@ -126,8 +158,13 @@ function readJson(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
       chunks.push(c);
     });
     req.on("end", () => finish(() => {
-      try { ok(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}); }
-      catch { no(new HttpError(400, "invalid JSON")); }
+      const text = Buffer.concat(chunks).toString("utf8");
+      try { ok(chunks.length ? JSON.parse(text) : {}); }
+      catch {
+        // a dumb radio bridge may POST the bare frame as text/plain (`curl -d CNSR4E1`)
+        if (/^CNS[A-Z][0-9A-Fa-f]{2}[01]?\s*$/.test(text)) ok(text.trim());
+        else no(new HttpError(400, "invalid JSON"));
+      }
     }));
     req.on("aborted", () => finish(() => no(new HttpError(400, "client aborted"))));
     req.on("error", (e) => finish(() => no(new HttpError(400, e.message))));
@@ -159,6 +196,13 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const r = await chain.relayDelegated(await readJson(req, res));
       broadcast({ type: "delegated", ...r });
       return json(200, r);
+    }
+    if (p === "/bridge/pending" && req.method === "GET") return json(200, { frames: radio.drain() });
+    if (p === "/bridge/uplink" && req.method === "POST") {
+      const body = await readJson(req, res);
+      const frame = typeof body === "string" ? body : (body as any)?.frame;
+      const r = await radio.uplink(frame, "http");
+      return json(r.result === "error" ? (r.status ?? 500) : 200, r);
     }
     let m: RegExpMatchArray | null;
     if ((m = p.match(/^\/badge\/([0-9a-fA-F]{1,4})\/pending$/)) && req.method === "GET") return json(200, { beaconId: norm(m[1]), pending: badges.drain(m[1]) });
@@ -211,6 +255,8 @@ server.on("upgrade", (req, socket, head) => {
     const id = url.searchParams.get("id");
     if (!id || !/^[0-9a-fA-F]{1,4}$/.test(id)) return socket.destroy();
     wss.handleUpgrade(req, socket, head, (ws) => badges.attach(id, ws));
+  } else if (url.pathname === "/bridge") {
+    wss.handleUpgrade(req, socket, head, (ws) => radio.attach(ws, url.searchParams.get("via") ?? "ws"));
   } else if (url.pathname === "/operator") {
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.on("error", (e) => log(`operator socket error: ${e.message}`));
@@ -230,6 +276,7 @@ server.listen(config.PORT, () => {
   console.log(`  voice     ${h.voice.provider}${h.voice.fallback ? " (fallback — set ELEVENLABS_API_KEY)" : ""}`);
   console.log(`  audit     ${h.audit.events} events, ${h.attest.batches} batches in ${config.AUDIT_LOG}${h.audit.unanchored ? `  (${h.audit.unanchored} unanchored)` : ""}`);
   console.log(`  auth      token ${config.SERVICE_TOKEN ? "required" : "not set (open)"}; CORS ${config.CORS_ORIGIN}`);
+  console.log(`  radio     bridge ws://localhost:${config.PORT}/bridge · GET /bridge/pending · POST /bridge/uplink  (keys ${config.BADGE_KEYS_DIR}; chain push ${logsSubscribed ? "on" : "off"})`);
   if (chain.relayer) {
     chain.conn.getBalance(chain.relayer.publicKey)
       .then((b) => { if (b < 0.01e9) console.log(`  !! relayer balance ${(b / 1e9).toFixed(3)} SOL — fund it or badge-signed updates will fail`); })

@@ -10,7 +10,16 @@ export type OperatorMessage =
   | { type: "alert"; beaconId: string; eventId: string; text: string; provider: string; audioUrl?: string; cached: boolean; playedLocally?: boolean }
   | { type: "alert-error"; beaconId: string; error: string }
   | { type: "attested"; batch: number; eventIds: string[]; beaconIds: string[]; heartbeat: boolean; signature: string; head: string; count: number; explorer: string | null }
-  | { type: "delegated"; signature: string; explorer: string; consent: boolean; revision: number };
+  | { type: "delegated"; signature: string; explorer: string; consent: boolean; revision: number }
+  // badge radio (A ↔ C): CNSF/CNSC frames going down to the badge, CNSR requests coming up
+  | { type: "radio"; at: number; dir: "down" | "up"; frame: string; transport: string; delivered?: number; queued?: boolean; outcome?: RadioOutcome }
+  | { type: "bridge"; connected: number; at: number };
+
+export type RadioOutcome =
+  | { result: "relayed"; signature: string; explorer: string; consent: boolean; revision: number }
+  | { result: "noop"; consent: boolean; note: string }
+  | { result: "ignored"; note: string }
+  | { result: "error"; error: string; status?: number };
 
 type Listener = (m: OperatorMessage) => void;
 

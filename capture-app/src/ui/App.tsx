@@ -20,7 +20,7 @@ export function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [events, setEvents] = useState<FilmEvent[]>([]);
   const [source, setSource] = useState("—");
-  const [decoder, setDecoder] = useState<"stub" | "optical">("stub");
+  const [decoder, setDecoder] = useState<"stub" | "optical">(flags.BEACON_DECODER);
   const [error, setError] = useState("");
 
   function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }

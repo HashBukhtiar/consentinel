@@ -7,8 +7,17 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["node"],
-    "lib": ["ES2022"]
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2022"
+    ]
   },
-  "include": ["src", "test", "../registry/client/src"]
+  "include": [
+    "src",
+    "test",
+    "scripts",
+    "../registry/client/src"
+  ]
 }

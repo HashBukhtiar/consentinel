@@ -27,9 +27,11 @@ export const flags = {
   // owned by A — shared contract value
   BEACON_SYMBOL_HZ: 10,
 
-  // optical decoder (mine, feeds A's decodeFrame). "stub" keeps the hero path
-  // safe until the pixel thresholds are tuned against a real badge/recording.
-  BEACON_DECODER: "stub" as "stub" | "optical",
+  // optical decoder (mine, feeds A's decodeFrame). "optical" decodes the real
+  // badge (thresholds tuned on Maaz's recording; also what "Synthetic badge"
+  // exercises). VITE_BEACON_DECODER=stub gives two fixed fake beacons — a
+  // no-badge fallback only, never for judges. The header button flips it live.
+  BEACON_DECODER: (env.VITE_BEACON_DECODER ?? "optical") as "stub" | "optical",
   BEACON_BRIGHT_T: 175, // 0..255 threshold for the localization mask
   BEACON_MIN_BORDER: 110, // min border luma for a confident sample (real screen ≈ 190-210)
   BEACON_ASPECT_MIN: 1.5, // patch aspect ≈ 304/132 = 2.3
