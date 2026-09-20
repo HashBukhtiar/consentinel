@@ -14,3 +14,4 @@ vision/badgekey/train.log
 vision/server.log
 yolov8n.pt
 runs/
+__pycache__/
