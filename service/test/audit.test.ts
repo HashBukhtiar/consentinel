@@ -66,3 +66,29 @@ assert.ok(chk.mismatches.includes("e2"), "edited event detected from raw fields"
 assert.ok(!bad.verify({ head: toHex(head), count: 3 }).ok, "tampered log fails verification even with the right head");
 
 console.log("ok — audit log hashing, batch commitments + heartbeat fold, tamper detection, reload");
+
+// crash recovery: batches that landed on-chain but were never recorded locally
+{
+  const dir2 = mkdtempSync(join(tmpdir(), "consentinel-audit-recover-"));
+  const r = new AuditLog(join(dir2, "events.jsonl"));
+  r.append({ eventId: "r1", beaconId: "4E", at: 1, cameraId: "cam-1" });
+  const b = r.nextHead(["r1"]);
+  r.recordBatch({ eventIds: ["r1"], commitment: toHex(b.commitment), head: toHex(b.head), signature: "s", at: 1 });
+  // (a) one heartbeat landed, process died before recordBatch
+  const hb = rollHead(b.head, batchCommitment([]));
+  assert.equal(r.verify({ head: toHex(hb), count: 2 }).ok, false, "before recovery the log is one behind");
+  assert.equal(r.recover({ head: toHex(hb), count: 2 }), 1, "recovers a lost heartbeat");
+  assert.ok(r.verify({ head: toHex(hb), count: 2 }).ok, "and verifies afterwards");
+  assert.equal(r.recover({ head: toHex(hb), count: 2 }), 0, "idempotent");
+  // (b) a real batch of the still-unanchored entries landed, then a heartbeat
+  const r2 = r.append({ eventId: "r2", beaconId: "4E", at: 2, cameraId: "cam-1" });
+  const lost = rollHead(hb, batchCommitment([filmEventHash(r2)]));
+  const lost2 = rollHead(lost, batchCommitment([]));
+  assert.equal(r.recover({ head: toHex(lost2), count: 4 }), 2, "recovers batch-of-unanchored + heartbeat");
+  assert.equal(r.unanchored().length, 0, "the lost batch's entries are now anchored");
+  assert.ok(r.verify({ head: toHex(lost2), count: 4 }).ok);
+  // (c) a head that nothing we could have sent explains stays a mismatch
+  assert.equal(r.recover({ head: toHex(rollHead(lost2, filmEventHash(r2))), count: 5 }), 0, "unexplained head is not papered over");
+  assert.equal(r.recover({ head: toHex(lost2), count: 9 }), 0, "a gap beyond maxGap is not guessed at");
+  console.log("ok — crash recovery of in-flight batches");
+}
