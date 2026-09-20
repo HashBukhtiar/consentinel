@@ -62,6 +62,10 @@ export const config = {
   /** Debounce identical spoken alerts per badge (the capture app already debounces FilmEvents). */
   ALERT_MIN_INTERVAL_MS: Number(env("ALERT_MIN_INTERVAL_MS", "8000")),
   MAX_PENDING_EVENTS: 500,
+  /** Thru (Unto Labs) evidence ledger — every film-event + attestation batch becomes its own Alphanet account via the `thru` CLI. Auto-disables if the CLI/funds are missing. */
+  THRU_ENABLED: bool("THRU_ENABLED", true),
+  THRU_FEE_PAYER: env("THRU_FEE_PAYER", "consentinel"),
+  THRU_EXPLORER: env("THRU_EXPLORER", "https://scan.thru.org"),
 };
 
 /** RPC URL with any query string (API keys live there) removed. */

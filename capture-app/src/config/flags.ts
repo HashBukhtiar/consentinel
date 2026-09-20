@@ -169,6 +169,7 @@ export const flags = {
   //   "faces": pixelate only detected faces that are not opt_in (padded outward).
   //            Looks like a normal video with blurred people; an undetected face
   //            is shown clear. The privacy story is weaker; the picture is nicer.
+  PRIVACY_BLUR: true, // operator can turn all pixelation off from the UI (raw feed for the demo)
   COMPOSITE: (env.VITE_COMPOSITE ?? "frame") as "frame" | "faces",
   BLUR_PAD: 0.35, // "faces" mode: pad each blurred bbox outward — fail-safe covers more, never less
 
