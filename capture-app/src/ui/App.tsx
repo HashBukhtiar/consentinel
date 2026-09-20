@@ -5,7 +5,11 @@ import { startSynthetic, SyntheticHandle } from "../sources/synthetic";
 import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
 import { chain, startConsent } from "../consent/store";
-import type { FilmEvent, Track } from "../shared/schema";
+import type { BeaconDebug } from "../decode/beacon";
+import { captureDiagnostic, sendDiagnostic, captureSequence, sendSequence } from "../diag/snapshot";
+import type { BeaconReading, FilmEvent, Track } from "../shared/schema";
+
+const PROC_WIDTHS = [480, 720, 960, 1280];
 
 export function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -18,15 +22,49 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [fps, setFps] = useState(0);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [beacons, setBeacons] = useState<BeaconReading[]>([]);
+  const [debug, setDebug] = useState<BeaconDebug | null>(null);
   const [events, setEvents] = useState<FilmEvent[]>([]);
   const [source, setSource] = useState("—");
   const [decoder, setDecoder] = useState<"stub" | "optical">(flags.BEACON_DECODER);
+  const [overlay, setOverlay] = useState(flags.BEACON_DEBUG);
+  const [composite, setComposite] = useState<"frame" | "faces">(flags.COMPOSITE);
+  function toggleComposite() { flags.COMPOSITE = flags.COMPOSITE === "frame" ? "faces" : "frame"; setComposite(flags.COMPOSITE); }
+  const [procWidth, setProcWidth] = useState(flags.PROCESS_WIDTH);
   const [error, setError] = useState("");
+  const [diag, setDiag] = useState("");
 
   function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }
+  // Ship what the camera sees (frame + badge crops + classifier numbers) to the service's data/diag/.
+  async function snapshot() {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) { setDiag("start a camera/clip first"); return; }
+    setDiag("capturing 1.2 s…");
+    try { setDiag(await sendDiagnostic(await captureDiagnostic(v, flags.PROCESS_WIDTH, beacons, tracks))); }
+    catch (e) { setDiag(`diag failed: ${(e as Error).message}`); }
+  }
+  // 4 s of raw frames for an offline replay of the real decoder (scripts/replay.ts).
+  async function record() {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) { setDiag("start a camera/clip first"); return; }
+    try {
+      // native width: the replay then runs the same native-res crop (fine sampler) the live loop uses
+      const seq = await captureSequence(v, 4, 15, v.videoWidth, (n) => setDiag(`recording… ${n} frames`));
+      setDiag(`uploading ${seq.frames.length} frames…`);
+      setDiag(await sendSequence(seq));
+    } catch (e) { setDiag(`record failed: ${(e as Error).message}`); }
+  }
+  function toggleOverlay() { flags.BEACON_DEBUG = !flags.BEACON_DEBUG; setOverlay(flags.BEACON_DEBUG); }
+  function setWidth(w: number) { flags.PROCESS_WIDTH = w; setProcWidth(w); } // the loop reads it every frame
 
   useEffect(() => { listCameras().then(setCameras).catch(() => {}); }, [running]);
   useEffect(() => { startConsent(); }, []); // chain cache runs from page load, independent of the camera
+  // ?clip=<url> runs the whole pipeline on a recording (e.g. /demo/badge-4E.mp4) — the no-camera self-test
+  useEffect(() => {
+    const clip = new URLSearchParams(location.search).get("clip");
+    if (clip) void begin(null, clip, `Clip · ${clip.split("/").pop()}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function startPipeline(stream: MediaStream | null, fileUrl: string | null, label: string) {
     setError("");
@@ -34,7 +72,7 @@ export function App() {
     if (stream) { v.srcObject = stream; v.removeAttribute("src"); }
     else if (fileUrl) { v.srcObject = null; v.src = fileUrl; v.loop = true; }
     await v.play().catch(() => {});
-    const p = new Pipeline(v, canvasRef.current!, (s: PipelineState) => { setFps(s.fps); setTracks(s.tracks); },
+    const p = new Pipeline(v, canvasRef.current!, (s: PipelineState) => { setFps(s.fps); setTracks(s.tracks); setBeacons(s.beacons); setDebug(s.debug); },
       (e) => setEvents((prev) => [e, ...prev].slice(0, 6)));
     pipeRef.current = p;
     try { await p.start(); setRunning(true); setSource(label); }
@@ -48,16 +86,21 @@ export function App() {
 
   // Overlay real-format beacon patches on the webcam and decode them live — no
   // hardware. Switches the decoder to optical for this session only.
+  // Works without a camera too (dark background), so the whole optical path —
+  // decode → bind → chain lookup → light-borne consent relay — runs on any machine.
   async function startSyntheticBadge() {
     stop();
     try {
-      const cam = await startCamera(deviceId || undefined);
       const base = baseRef.current!;
-      base.srcObject = cam;
-      await base.play().catch(() => {});
+      let camera = true;
+      try {
+        const cam = await startCamera(deviceId || undefined);
+        base.srcObject = cam;
+        await base.play().catch(() => {});
+      } catch { base.srcObject = null; camera = false; }
       setBeacon("optical");
       synthRef.current = startSynthetic(base);
-      await startPipeline(synthRef.current.stream, null, "Synthetic badge · optical");
+      await startPipeline(synthRef.current.stream, null, "Synthetic badge · optical" + (camera ? "" : " · no camera"));
     } catch (e: any) { fail(e); }
   }
 
@@ -69,7 +112,7 @@ export function App() {
       (el.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop());
       el.srcObject = null; el.removeAttribute("src");
     }
-    setRunning(false); setTracks([]); setFps(0);
+    setRunning(false); setTracks([]); setBeacons([]); setDebug(null); setFps(0);
   }
 
   const fail = (e: any) => setError(e?.message ?? String(e));
@@ -77,6 +120,14 @@ export function App() {
   return (
     <div className="app">
       <header>
+        {/* Drop a file at capture-app/public/logo.svg and it appears here.
+            Until then the mark hides itself and the wordmark stands alone. */}
+        <img
+          className="logo"
+          src="/logo.svg"
+          alt=""
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+        />
         <h1>Consentinel <span>capture</span></h1>
         <div className="tag">fail-safe: blur unless opt-in</div>
         {chain && <div className="tag chain" title={chain.status.programId}>consent: Solana {chain.status.cluster}</div>}
@@ -93,6 +144,17 @@ export function App() {
         <button onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")} title="stub = fixed fake beacons · optical = decode the real badge">
           beacon: {decoder}
         </button>
+        <button onClick={toggleComposite} title="whole frame = default deny: everything pixelated, clear windows only for opt-in faces (an undetected face stays covered) · faces only = classic look, only detected non-consenting faces are pixelated">
+          blur: {composite === "frame" ? "whole frame" : "faces only"}
+        </button>
+        <button onClick={toggleOverlay} title="draw what the decoder sees: candidate patches (red = not confident, yellow = reading), decoded ids (green), face boxes">
+          overlay: {overlay ? "on" : "off"}
+        </button>
+        <select value={procWidth} onChange={(e) => setWidth(Number(e.target.value))} title="decode/detect resolution — higher = badge readable from farther, costs CPU">
+          {PROC_WIDTHS.map((w) => <option key={w} value={w}>{w}px</option>)}
+        </select>
+        <button onClick={snapshot} title="save what the camera sees (full frame + badge crops + classifier numbers) to the service's data/diag/ for offline debugging">📸 diag</button>
+        <button onClick={record} title="record 4 s of frames to the service's data/diag/ so the real decoder can be replayed on them offline (scripts/replay.ts)">🎥 4s</button>
         <label className="file">Load clip
           <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) begin(null, URL.createObjectURL(f), "Clip · fallback"); }} />
         </label>
@@ -100,10 +162,11 @@ export function App() {
       </div>
 
       {error && <div className="error">{error}</div>}
+      {diag && <div className="muted" style={{ marginBottom: 8 }}>diag: {diag}</div>}
 
       <div className="stage">
         <canvas ref={canvasRef} className="feed" />
-        <OperatorPanel fps={fps} source={source} tracks={tracks} events={events} />
+        <OperatorPanel fps={fps} source={source} tracks={tracks} events={events} beacons={beacons} debug={debug} decoder={decoder} />
       </div>
 
       <video ref={videoRef} muted playsInline style={{ display: "none" }} />

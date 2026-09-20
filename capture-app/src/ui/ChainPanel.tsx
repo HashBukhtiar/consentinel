@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { signConsentMessage, type ConsentView, type TxSigner } from "../../../registry/client/src/registry";
 import { defaultExpiresAt, explorerUrl } from "../../../registry/client/src/core";
@@ -24,6 +24,14 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
 
   const [keys, setKeys] = useState<DemoKeys | null>(null);
   useEffect(() => { let on = true; loadDemoKeys().then((k) => { if (on) setKeys(k); }); return () => { on = false; }; }, []);
+  // an auto-enrolled badge's key lands in the demo key file after the page loaded: re-read it when a record has no signer
+  const keyReload = useRef(0);
+  const ownerless = cache.records().some((r) => !keys?.owners.has(r.owner));
+  useEffect(() => {
+    if (!ownerless || Date.now() - keyReload.current < 5000) return;
+    keyReload.current = Date.now();
+    void loadDemoKeys().then((k) => { if (k) setKeys(k); });
+  }, [ownerless, cache.status.lastSyncAt]);
   const wallet = useMemo(() => detectWallet(), []);
   const [walletErr, setWalletErr] = useState("");
   const [delegated, setDelegated] = useState(true); // the badge-signed path is the real one; default to it
@@ -50,6 +58,10 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
   async function act(rec: ConsentView, action: "grant" | "revoke" | "close" | "clear-override") {
     const s = signerFor(rec);
     if (!s || busy[rec.badgeId]?.pending) return;
+    // Deleting the record is the one action that is not a toggle: afterwards the
+    // badge is unregistered (fail-safe blur, grant/revoke gone) until the issuer
+    // runs `npm run seed` again. Never let a stray click on stage do that.
+    if (action === "close" && !window.confirm(`Delete ${rec.badgeId}'s on-chain consent record?\n\nThe badge becomes unregistered: it reads as unknown ⇒ always blurred, and grant/revoke disappear until the organizer re-registers it (npm run seed in registry/). Rent goes back to the owner.`)) return;
     const id = rec.badgeId;
     const t0 = performance.now();
     const feePayer = keys?.relayer ?? s.signer; // badge keys hold no SOL; the demo relayer pays
@@ -127,7 +139,7 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
                   <button className="toggle opt_out" disabled={!s || !effective || pending} onClick={() => act(r, "revoke")}>revoke</button>
                 </>
               )}
-              <button className="toggle danger" disabled={!s || pending} onClick={() => act(r, "close")} title="delete the record — rent back to owner; app fail-safes to blur">close</button>
+              <button className="toggle danger" disabled={!s || pending} onClick={() => act(r, "close")} title="DELETE the on-chain record (asks first) — the badge becomes unregistered ⇒ always blurred until re-seeded; rent back to owner">delete record…</button>
               {b && (b.url ? <a className="status" href={b.url} target="_blank" rel="noreferrer">{b.text} ↗</a> : <span className={"status" + (b.err ? " err" : "")}>{b.text}</span>)}
             </div>
           </div>

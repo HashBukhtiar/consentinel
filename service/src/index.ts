@@ -5,6 +5,9 @@
 //   GET  /health                  flags + subsystem state
 //   GET  /badge/:id/pending       badge poll transport (drains the queue)
 //   GET  /badge/:id/consent       badge reads its own on-chain state (+ nonce/instance/serverTime to sign)
+//   POST /badge/:id/seen          capture app saw an id with no record → issuer auto-registers it as opt_out (Bearer SERVICE_TOKEN if set)
+//   POST /diag                    capture app's 📸 diag: frame + badge crops + classifier numbers → data/diag/ (Bearer SERVICE_TOKEN if set)
+//   POST /diag/seq                capture app's 🎥 4s: a frame sequence → data/diag/<ts>-seq/ for scripts/replay.ts (Bearer SERVICE_TOKEN if set)
 //   POST /consent/delegated       badge-signed consent update, relayed on-chain (signature-verified; open)
 //   GET  /audit/events?badge=A1B2 the off-chain log (Bearer SERVICE_TOKEN if set) — for the audit layer
 //   GET  /audit/verify            local log recomputed vs on-chain head (hashes only; open)
@@ -15,7 +18,7 @@
 //   WS   /operator                capture-app UI feed (alerts, attestations, radio frames)
 //   GET  /audio/<file>.mp3        ElevenLabs output
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config, redactRpcUrl } from "./config";
@@ -24,6 +27,7 @@ import { BadgeHub, norm } from "./badges";
 import { Voice, alertText } from "./voice";
 import { Chain, HttpError } from "./chain";
 import { RadioBridge } from "./radio";
+import { Enroller } from "./enroll";
 import { explorerUrl } from "../../registry/client/src/core";
 
 const log = (m: string) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
@@ -61,6 +65,7 @@ await chain.init();
 // up and becomes a badge-signed, relayed transaction.
 const radio = new RadioBridge(chain, broadcast, log);
 radio.start(config.RADIO_SYNC_MS);
+const enroller = new Enroller(chain, broadcast, log);
 let logsSubscribed = false;
 try {
   chain.reg.onLogs((n) => {
@@ -129,6 +134,7 @@ function health() {
     relayer: chain.relayer?.publicKey.toBase58() ?? null,
     badges: badges.status(),
     radio: { ...radio.status(), logsSubscribed, syncMs: config.RADIO_SYNC_MS },
+    autoRegister: enroller.status(),
     operators: operators.size,
   };
 }
@@ -136,6 +142,53 @@ function health() {
 function authorized(req: IncomingMessage): boolean {
   if (!config.SERVICE_TOKEN) return true;
   return req.headers.authorization === `Bearer ${config.SERVICE_TOKEN}`;
+}
+
+/** Raw body up to `max` bytes (the diag upload carries images). */
+function readBody(req: IncomingMessage, res: ServerResponse, max: number): Promise<string> {
+  return new Promise((ok, no) => {
+    const chunks: Buffer[] = [];
+    let size = 0, done = false;
+    const finish = (fn: () => void) => { if (!done) { done = true; fn(); } };
+    req.on("data", (c: Buffer) => {
+      if (done) return;
+      size += c.length;
+      if (size > max) {
+        finish(() => { res.writeHead(413, { "content-type": "application/json" }).end(JSON.stringify({ error: `body over ${max} bytes` })); no(new HttpError(413, "body too large")); req.destroy(); });
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => finish(() => ok(Buffer.concat(chunks).toString("utf8"))));
+    req.on("aborted", () => finish(() => no(new HttpError(400, "client aborted"))));
+    req.on("error", (e) => finish(() => no(new HttpError(400, e.message))));
+  });
+}
+
+function saveDiag(d: any): { json: string; files: number; symbols: string } {
+  const dir = config.DIAG_DIR;
+  mkdirSync(dir, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  let files = 0;
+  const saveDataUrl = (name: string, dataUrl: unknown): string | undefined => {
+    const m = typeof dataUrl === "string" ? /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
+    if (!m) return undefined;
+    const f = join(dir, `${ts}-${name}.${m[1] === "jpeg" ? "jpg" : "png"}`);
+    writeFileSync(f, Buffer.from(m[2], "base64"));
+    files++;
+    return f;
+  };
+  if (d.frameJpeg) { d.frameFile = saveDataUrl("frame", d.frameJpeg); delete d.frameJpeg; }
+  for (const [k, s] of (Array.isArray(d.samples) ? d.samples : []).entries()) {
+    for (const [j, c] of (Array.isArray(s.candidates) ? s.candidates : []).entries()) {
+      if (c.cropPng) { c.cropFile = saveDataUrl(`s${String(k).padStart(2, "0")}-c${j}`, c.cropPng); delete c.cropPng; }
+    }
+  }
+  const jsonPath = join(dir, `${ts}.json`);
+  writeFileSync(jsonPath, JSON.stringify(d, null, 2));
+  files++;
+  const symbols = (Array.isArray(d.samples) ? d.samples : []).map((s: any) => s.candidates?.[0]?.fine?.symbol ?? "-").join(" ");
+  return { json: jsonPath, files, symbols };
 }
 
 function readJson(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
@@ -192,6 +245,34 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       if (!authorized(req)) return json(401, { error: "missing or wrong bearer token" });
       return json(202, await handleFilmEvent(await readJson(req, res)));
     }
+    if (p === "/diag/seq" && req.method === "POST") {
+      if (!authorized(req)) return json(401, { error: "missing or wrong bearer token" });
+      let d: any;
+      try { d = JSON.parse(await readBody(req, res, 80_000_000)); } catch { if (res.headersSent) return; return json(400, { error: "invalid JSON" }); }
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const dir = join(config.DIAG_DIR, `${ts}-seq`);
+      mkdirSync(dir, { recursive: true });
+      const index: { tMs: number; file: string }[] = [];
+      for (const [i, f] of (Array.isArray(d.frames) ? d.frames : []).entries()) {
+        const m = typeof f?.jpeg === "string" ? /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(f.jpeg) : null;
+        if (!m) continue;
+        const name = `${String(i).padStart(3, "0")}.jpg`;
+        writeFileSync(join(dir, name), Buffer.from(m[1], "base64"));
+        index.push({ tMs: Number(f.tMs) || 0, file: name });
+      }
+      writeFileSync(join(dir, "index.json"), JSON.stringify({ at: d.at, video: d.video, width: d.width, procW: d.procW, frames: index }, null, 2));
+      log(`diag sequence saved → ${dir} (${index.length} frames over ${index.length ? index[index.length - 1].tMs : 0} ms, ${d.width}px wide) · replay: npx tsx scripts/replay.ts ${dir}`);
+      return json(200, { ok: true, dir, frames: index.length });
+    }
+    if (p === "/diag" && req.method === "POST") {
+      if (!authorized(req)) return json(401, { error: "missing or wrong bearer token" });
+      let d: any;
+      try { d = JSON.parse(await readBody(req, res, 40_000_000)); } catch (e) { if (res.headersSent) return; return json(400, { error: "invalid JSON" }); }
+      const r = saveDiag(d);
+      const cands = d.samples?.[0]?.candidates ?? [];
+      log(`diag saved → ${r.json} (${r.files} files) · video ${d.video?.w}x${d.video?.h} @${d.procW}px · ${cands.length} candidate(s)${cands[0] ? ` · largest ${cands[0].box.w}px reject=${cands[0].reject ?? "none"} ring=${cands[0].fine?.ringLuma}` : ""} · symbols: ${r.symbols}`);
+      return json(200, { ok: true, ...r });
+    }
     if (p === "/consent/delegated" && req.method === "POST") {
       const r = await chain.relayDelegated(await readJson(req, res));
       broadcast({ type: "delegated", ...r });
@@ -201,11 +282,16 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (p === "/bridge/uplink" && req.method === "POST") {
       const body = await readJson(req, res);
       const frame = typeof body === "string" ? body : (body as any)?.frame;
-      const r = await radio.uplink(frame, "http");
+      const via = typeof body === "object" && body && typeof (body as any).via === "string" ? String((body as any).via).slice(0, 16) : "http";
+      const r = await radio.uplink(frame, via); // via "optical" = the capture app read the request off the badge's light
       return json(r.result === "error" ? (r.status ?? 500) : 200, r);
     }
     let m: RegExpMatchArray | null;
     if ((m = p.match(/^\/badge\/([0-9a-fA-F]{1,4})\/pending$/)) && req.method === "GET") return json(200, { beaconId: norm(m[1]), pending: badges.drain(m[1]) });
+    if ((m = p.match(/^\/badge\/([0-9a-fA-F]{1,4})\/seen$/)) && req.method === "POST") {
+      if (!authorized(req)) return json(401, { error: "missing or wrong bearer token" });
+      return json(200, await enroller.seen(m[1]));
+    }
     if ((m = p.match(/^\/badge\/([0-9a-fA-F]{1,4})\/consent$/)) && req.method === "GET") {
       const rec = await chain.reg.fetchConsent(m[1]);
       const serverTime = Math.floor(Date.now() / 1000);
@@ -277,6 +363,7 @@ server.listen(config.PORT, () => {
   console.log(`  audit     ${h.audit.events} events, ${h.attest.batches} batches in ${config.AUDIT_LOG}${h.audit.unanchored ? `  (${h.audit.unanchored} unanchored)` : ""}`);
   console.log(`  auth      token ${config.SERVICE_TOKEN ? "required" : "not set (open)"}; CORS ${config.CORS_ORIGIN}`);
   console.log(`  radio     bridge ws://localhost:${config.PORT}/bridge · GET /bridge/pending · POST /bridge/uplink  (keys ${config.BADGE_KEYS_DIR}; chain push ${logsSubscribed ? "on" : "off"})`);
+  console.log(`  enrol     auto-register first-seen badges as opt_out: ${enroller.enabled ? "on" : "OFF"} (issuer key ${config.ISSUER_KEYPAIR}${existsSync(config.ISSUER_KEYPAIR) ? "" : " — missing"})`);
   if (chain.relayer) {
     chain.conn.getBalance(chain.relayer.publicKey)
       .then((b) => { if (b < 0.01e9) console.log(`  !! relayer balance ${(b / 1e9).toFixed(3)} SOL — fund it or badge-signed updates will fail`); })

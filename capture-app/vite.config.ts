@@ -12,15 +12,23 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
-  // tune.html is the beacon threshold rig — a separate entry so nothing in it
-  // can reach the hero path. Dev: http://localhost:5173/tune.html
+  // tune.html is the beacon threshold rig, badge.html turns any phone/laptop
+  // screen into a beacon — both separate entries so nothing in them can reach
+  // the hero path. Dev: http://localhost:5173/tune.html, /badge.html
   build: {
     rollupOptions: {
-      input: { main: resolve(here, "index.html"), tune: resolve(here, "tune.html") },
+      input: {
+        main: resolve(here, "index.html"),
+        tune: resolve(here, "tune.html"),
+        badge: resolve(here, "badge.html"),
+        decode: resolve(here, "decode.html"),
+      },
     },
   },
   server: {
     port: 5173,
+    host: true, // phones on the LAN need to reach badge.html
+
     // shared/ (A's beacon contract) and registry/client/src (C's Solana client) live one level up
     fs: { allow: [repoRoot] },
   },

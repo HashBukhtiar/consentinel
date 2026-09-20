@@ -20,6 +20,11 @@ export class Tracker {
   private tracks: Track[] = [];
   private nextId = 1;
 
+  /** The tracks as they stand, no new detections (between sidecar results). */
+  current(): Track[] {
+    return this.tracks;
+  }
+
   update(dets: RawFace[]): Track[] {
     const used = new Set<number>();
     for (const d of dets) {

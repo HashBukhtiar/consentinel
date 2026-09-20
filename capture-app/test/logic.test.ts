@@ -6,6 +6,7 @@ import { Tracker } from "../src/vision/track";
 import { associate } from "../src/vision/associate";
 import { decide } from "../src/consent/decide";
 import type { Consent, Track } from "../src/shared/schema";
+import { flags as flagsT } from "../src/config/flags";
 
 // 1) tracker keeps the same id across a small move
 const tr = new Tracker();
@@ -28,7 +29,43 @@ decide(tracks, get, 1000);
 assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, false, "opt_in ⇒ clear");
 assert.equal(tracks.find((t) => t.trackId === "L")!.blurred, true, "no beacon ⇒ blur");
 
-console.log("ok — tracker identity, association, fail-safe blur");
+// 3b) the badge's own flag can only add privacy: OPT-OUT on the light forces a blur even on chain opt_in,
+//     OPT-IN on the light never clears without the chain
+associate(tracks, [{ beaconId: "X", imagePosition: { x: 0.65, y: 0.7 }, confidence: 1, optIn: false }], 1000);
+decide(tracks, get, 1000);
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, true, "badge says OPT-OUT ⇒ blur even though chain says opt_in");
+associate(tracks, [{ beaconId: "X", imagePosition: { x: 0.65, y: 0.7 }, confidence: 1, optIn: true }], 1000);
+decide(tracks, get, 1000);
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, false, "badge OPT-IN + chain opt_in ⇒ clear");
+decide(tracks, () => "opt_out", 1000);
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, true, "badge OPT-IN alone never clears: the chain decides");
+decide(tracks, get, 1000 + flagsT.BIND_TTL_MS + 1);
+assert.equal(tracks.find((t) => t.trackId === "R")!.beaconOptIn, undefined, "an expired binding drops the light's bit too");
+
+// 3c) a badge hangs UNDER its wearer's face. Someone leaning in beside the
+//     wearer — even when they are the only face detected — never wins it, and
+//     when the wearer's face is back it takes the badge and the neighbour's stale
+//     binding is released at once, not when its TTL runs out.
+{
+  const wearer: Track = { trackId: "W", bbox: { x: 0.40, y: 0.30, w: 0.20, h: 0.24 }, consent: "unknown", blurred: true, missed: 0 };
+  const beside: Track = { trackId: "B", bbox: { x: 0.08, y: 0.32, w: 0.20, h: 0.24 }, consent: "unknown", blurred: true, missed: 0 };
+  const badge = { beaconId: "27", imagePosition: { x: 0.50, y: 0.78 }, confidence: 1, optIn: true };
+  associate([beside], [badge], 2000);
+  assert.equal(beside.beaconId, undefined, "a face a full face-height to the side of the badge is not its wearer, even alone");
+  associate([wearer, beside], [badge], 2100);
+  assert.equal(wearer.beaconId, "27", "the face straight above the badge wins");
+  assert.equal(beside.beaconId, undefined);
+  // the wearer looks down: only a leaning-in face is left, a face-width to the side but within reach
+  const leaner: Track = { trackId: "N", bbox: { x: 0.22, y: 0.34, w: 0.20, h: 0.24 }, consent: "unknown", blurred: true, missed: 0 };
+  associate([leaner], [badge], 2200);
+  assert.equal(leaner.beaconId, "27", "with nobody else in frame a nearby face above the badge does bind");
+  associate([wearer, leaner], [badge], 2300);
+  assert.equal(wearer.beaconId, "27", "the wearer's face is back and reclaims the badge");
+  assert.equal(leaner.beaconId, undefined, "the neighbour's stale binding is released immediately");
+  assert.equal(leaner.beaconOptIn, undefined);
+}
+
+console.log("ok — tracker identity, association (a neighbour never wins the badge, stale bindings release), fail-safe blur, light flag only adds privacy");
 
 // 4) chain cache semantics (no network: autoFetch off, synthetic snapshots)
 import { ChainConsentCache } from "../src/consent/chainCache";
@@ -78,6 +115,21 @@ assert.equal(cache.get("A1B2"), "unknown", "stale cache ⇒ unknown ⇒ blur");
 assert.equal(cache.get("C3D4"), "unknown", "stale cache ⇒ unknown ⇒ blur (opt_in too)");
 cache.applyLogs({ signature: "s6", slot: 107, err: null, events: [] });
 assert.equal(cache.get("C3D4"), "opt_in", "a fresh push restores authority");
+
+// 4b) partial refresh (getMultipleAccounts path): updates + closes only what it queried
+{
+  const c2 = new ChainConsentCache("http://127.0.0.1:8899", { autoFetch: false, cluster: "localnet", now: () => clock });
+  c2.applySnapshot({ registry: null, consents: [rec("1A", true, 0, "o1"), rec("2B", false, 0, "o2")], overrides: [], cameras: [], slot: 100 });
+  c2.status.freshAt = clock; // applySnapshot alone doesn't stamp freshness; syncNow does
+  // a partial that only mentions 1A must NOT drop 2B
+  c2.applyPartial({ registry: null, consents: [{ ...rec("1A", false, 1, "o1") }], overrides: [], cameras: [], slot: 101 });
+  assert.equal(c2.get("1A"), "opt_out", "partial refresh updates the queried record");
+  assert.equal(c2.get("2B"), "opt_out", "partial refresh leaves unqueried records alone");
+  // an older partial cannot overwrite a newer state
+  c2.applyPartial({ registry: null, consents: [{ ...rec("1A", true, 0, "o1") }], overrides: [], cameras: [], slot: 90 });
+  assert.equal(c2.get("1A"), "opt_out", "stale partial is ignored (slot-ordered)");
+  console.log("ok — chain cache partial refresh: targeted update, no collateral drops, slot-ordered");
+}
 
 console.log("ok — chain cache: fail-safe unknown, slot ordering, owner-checked overrides, tombstones, staleness");
 

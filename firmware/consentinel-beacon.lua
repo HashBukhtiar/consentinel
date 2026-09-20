@@ -36,9 +36,14 @@ local PAD = 30
 local PATCH_W, PATCH_H = 320, 240
 local POS_X, POS_Y = -PAD, -PAD
 
--- The ring is the localization anchor AND the white reference the decoder
--- divides interior colours by. MUST match BORDER_PX in shared/beacon.ts.
+-- The ring's geometry is kept (the digit grid is laid out inside it and the
+-- decoder's KEY contract in shared/beacon.ts depends on that), but the ring
+-- is painted BLACK now: the static-key decoder never reads it, and on a webcam
+-- at 0.5-1 m its blown-out white bloomed 2-6 px into the digits next to it,
+-- which lit the last digit's bottom segment and drowned a trailing '1'. Set
+-- RING to BASE_WHITE to get the old look back.
 local BORDER = 24
+local RING = 0x000000
 local IN_X, IN_Y = POS_X + BORDER, POS_Y + BORDER
 local IN_W, IN_H = PATCH_W - 2 * BORDER, PATCH_H - 2 * BORDER  -- 272 x 192
 
@@ -63,7 +68,10 @@ local BASE_WHITE, OFF = 0xFFFFFF, 0x000000
 
 -- ------------------------------------------------------------- wire format
 local ID_BITS, CRC_BITS = 8, 4                 -- MUST match shared/beacon.ts
-local LED_LEVEL = 255       -- safe ONLY because the LEDs never blink
+-- 255 blew the LEDs out to a 25 px white-cored halo at 1 m on a 1080p webcam,
+-- hugging the display's corners; the decoder now filters those, but at 64 the
+-- halo is a quarter the size and the colour still reads across a room.
+local LED_LEVEL = 64        -- safe ONLY because the LEDs never blink
 local STOPPED_MS, ALERT_MS = 2500, 6000
 local RADIO_TAG = "CNS"
 local BR_MIN, BR_MAX, BR_STEP = 30, 100, 5
@@ -148,7 +156,7 @@ end
 local function paint_key()
   local on = dim((st.consent == 1) and BASE_IN or BASE_OUT)
   local p = payload()
-  ui.frame:style({ bg_color = dim(BASE_WHITE) })
+  ui.frame:style({ bg_color = dim(RING) })
   for d = 0, D_N - 1 do
     local nibble = (p >> (4 * (D_N - 1 - d))) & 0xF
     local mask = SEG[nibble + 1]
@@ -288,7 +296,7 @@ function on_enter(root)
   -- semantics. PATCH_* is the TRUE panel size, so the ring closes on all four
   -- edges -- oversizing it runs the right and bottom off-screen and leaves
   -- the localizer an open quad it cannot rectify.
-  ui.frame = box(ui.bcn, PATCH_W, PATCH_H, POS_X, POS_Y, BASE_WHITE)
+  ui.frame = box(ui.bcn, PATCH_W, PATCH_H, POS_X, POS_Y, RING)
   ui.inner = box(ui.bcn, IN_W, IN_H, IN_X, IN_Y, OFF)
   ui.inner:bring_to_front()
 

@@ -43,6 +43,19 @@ export const config = {
   AUDIT_LOG: abs(env("AUDIT_LOG", "../data/audit/film-events.jsonl")),
   /** Badge signing keys (badge-<ID>.json, written by `npm run seed`): the service signs CNSR radio requests with them. */
   BADGE_KEYS_DIR: abs(env("BADGE_KEYS_DIR", "../registry/keys")),
+  /**
+   * Auto-enrol: a badge id the camera sees for the first time is registered as
+   * opt_out by the organizer (issuer) key, so a card appears and can be granted.
+   * opt_out can never un-blur anyone, so this is safe for anyone to trigger.
+   */
+  AUTO_REGISTER: bool("AUTO_REGISTER", true),
+  ISSUER_KEYPAIR: abs(env("ISSUER_KEYPAIR", "~/.config/solana/id.json")),
+  /** Demo key file the operator panel loads (so it can sign for auto-enrolled badges too). */
+  DEMO_KEYS_FILE: abs(env("DEMO_KEYS_FILE", "../capture-app/public/demo/badges.json")),
+  /** Where the capture app's 📸 diag snapshots land (frame JPEG, badge crops, classifier JSON). */
+  DIAG_DIR: abs(env("DIAG_DIR", "../data/diag")),
+  /** Rent guard: at most this many auto-enrolments per service run. */
+  AUTO_REGISTER_MAX: Number(env("AUTO_REGISTER_MAX", "50")),
   /** While a radio bridge is connected, re-mirror every badge's consent this often (0 = off). Log pushes are the fast path. */
   RADIO_SYNC_MS: Number(env("RADIO_SYNC_MS", "20000")),
   AUDIO_DIR: join(SERVICE_DIR, "audio"),
