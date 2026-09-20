@@ -62,3 +62,16 @@ assert.ok(/solana/i.test(mail.text), "points at the on-chain record");
 assert.ok(!mail.text.includes(entry.hash), "the film-event hash stays off the wire");
 assert.ok(!mail.text.includes(entry.eventId), "the internal event id stays off the wire");
 console.log("ok — notice email says what happened without leaking the ledger");
+
+// ---- voice is a claim too --------------------------------------------------
+// CHANNEL_VOICE follows the provider, and the provider exists only when audio
+// will actually reach someone. Local playback off and no ElevenLabs ⇒ "none".
+import { Voice } from "../src/voice";
+import { config } from "../src/config";
+{
+  const was = { key: config.ELEVENLABS_API_KEY, play: config.PLAY_AUDIO_LOCALLY };
+  (config as any).ELEVENLABS_API_KEY = ""; (config as any).PLAY_AUDIO_LOCALLY = false;
+  assert.equal(new Voice().provider, "none", "no playback + no ElevenLabs ⇒ no voice provider ⇒ no voice claim");
+  (config as any).ELEVENLABS_API_KEY = was.key; (config as any).PLAY_AUDIO_LOCALLY = was.play;
+}
+console.log("ok — voice is claimed only when it can be heard");

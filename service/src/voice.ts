@@ -21,7 +21,9 @@ export class Voice {
   private lastSpoke = new Map<string, number>();
 
   constructor() {
-    this.provider = config.ELEVENLABS_API_KEY ? "elevenlabs" : process.platform === "darwin" ? "macos-say" : "none";
+    this.provider = config.ELEVENLABS_API_KEY ? "elevenlabs"
+      : process.platform === "darwin" && config.PLAY_AUDIO_LOCALLY ? "macos-say" // `say` only runs when it will be heard
+      : "none";
     mkdirSync(config.AUDIO_DIR, { recursive: true });
   }
 

@@ -111,8 +111,8 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
   // Thru: commit this one event immediately (no batching) — the evidence ledger
   void thru.commit("film-event", `ev${entry.seq}`, { eventId: entry.eventId, seq: entry.seq, hash: entry.hash, beacon: entry.beaconId, at: entry.at })
     .then((c) => c && broadcast({ type: "thru", kind: "film-event", eventId: entry.eventId, seed: c.seed, account: c.account, explorer: c.explorer, ms: c.ms }));
-  // voice is async and never blocks the response
-  voice.speak(say, entry.beaconId).then(
+  // voice is async and never blocks the response; with no provider there is nothing to say and nothing to claim
+  if (voice.provider !== "none") voice.speak(say, entry.beaconId).then(
     (spoken) => broadcast({ type: "alert", beaconId: entry.beaconId, eventId: entry.eventId, text: spoken.text, provider: spoken.provider, audioUrl: spoken.audioUrl, cached: spoken.cached, playedLocally: config.PLAY_AUDIO_LOCALLY }),
     (err) => broadcast({ type: "alert-error", beaconId: entry.beaconId, error: String(err?.message ?? err) }),
   );
@@ -388,7 +388,7 @@ server.listen(config.PORT, () => {
   console.log(`  program   ${h.program}  (${config.SOLANA_CLUSTER})`);
   console.log(`  camera    ${h.attest.camera ?? "—"}  registered=${h.attest.cameraRegistered}  attest=${h.attest.enabled ? `every ${config.ATTEST_INTERVAL_MS / 1000}s${config.ATTEST_HEARTBEAT ? " + heartbeat" : ""}` : "off"}${h.attest.lastError ? "  !! " + h.attest.lastError : ""}`);
   console.log(`  relayer   ${h.relayer ?? "—"}`);
-  console.log(`  voice     ${h.voice.provider}${h.voice.fallback ? " (fallback — set ELEVENLABS_API_KEY)" : ""}`);
+  console.log(`  voice     ${h.voice.provider === "none" ? "off (PLAY_AUDIO_LOCALLY=false, no ELEVENLABS_API_KEY) — CHANNEL_VOICE is never claimed" : h.voice.provider + (h.voice.fallback ? " (fallback — set ELEVENLABS_API_KEY)" : "")}`);
   console.log(`  audit     ${h.audit.events} events, ${h.attest.batches} batches in ${config.AUDIT_LOG}${h.audit.unanchored ? `  (${h.audit.unanchored} unanchored)` : ""}`);
   console.log(`  auth      token ${config.SERVICE_TOKEN ? "required" : "not set (open)"}; CORS ${config.CORS_ORIGIN}`);
   console.log(`  radio     bridge ws://localhost:${config.PORT}/bridge · GET /bridge/pending · POST /bridge/uplink  (keys ${config.BADGE_KEYS_DIR}; chain push ${logsSubscribed ? "on" : "off"})`);
