@@ -215,8 +215,13 @@ async def main():
             if n % 100 == 0:
                 print(f"{peer}: {n} frames · last {ms['total']:.0f} ms (faces {ms['faces']:.0f}, badge {ms['keys']:.0f}) · {len(faces)} faces, {len(keys)} keys", flush=True)
 
-    async with serve(handle, args.host, args.port, max_size=16 * 1024 * 1024, compression=None):
-        await asyncio.Future()
+    try:
+        async with serve(handle, args.host, args.port, max_size=16 * 1024 * 1024, compression=None):
+            await asyncio.Future()
+    except OSError as e:
+        if e.errno == 48 or "address already in use" in str(e).lower():
+            raise SystemExit(f"port {args.port} is taken — another server.py is running (lsof -nP -iTCP:{args.port}); stop it, or pass --port and VITE_VISION_URL")
+        raise
 
 
 if __name__ == "__main__":
