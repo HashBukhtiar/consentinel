@@ -35,6 +35,7 @@ export class Pipeline {
   private emitter: FilmEmitter;
   private detectCanvas = document.createElement("canvas");
   private sampleCanvas = document.createElement("canvas"); // native-res crop for fine beacon sampling
+  private sendCanvas = document.createElement("canvas"); // the frame the sidecar gets, when VISION_WIDTH differs from PROCESS_WIDTH
   private running = false;
   private raf = 0;
   private lastT = 0;
@@ -140,7 +141,17 @@ export class Pipeline {
     // whatever result has come back. Between results the tracks stand as they are
     // (≤ one round trip, ~2 frames, stale) and the decoder's holds keep ticking.
     const remote = this.remote?.connected ? this.remote : null;
-    if (remote) remote.submit(this.detectCanvas, tMs);
+    if (remote) {
+      const sendW = flags.VISION_WIDTH ? Math.min(flags.VISION_WIDTH, v.videoWidth) : procW;
+      let canvas = this.detectCanvas;
+      if (sendW !== procW) {
+        const sendH = Math.round((sendW * v.videoHeight) / v.videoWidth);
+        if (this.sendCanvas.width !== sendW || this.sendCanvas.height !== sendH) { this.sendCanvas.width = sendW; this.sendCanvas.height = sendH; }
+        this.sendCanvas.getContext("2d")!.drawImage(v, 0, 0, sendW, sendH);
+        canvas = this.sendCanvas;
+      }
+      remote.submit(canvas, tMs);
+    }
     const res = remote ? remote.take() : null;
     if (remote) this.stageMs.sidecar = remote.rttMs; else delete this.stageMs.sidecar;
     let beacons: BeaconReading[] = [];

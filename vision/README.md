@@ -16,7 +16,7 @@ Nothing here identifies anyone: face boxes only, no embeddings, nothing stored (
 .venv/bin/python server.py      # ws://127.0.0.1:8765 — prints per-model ms once warmed up
 ```
 
-The capture app connects automatically (`VITE_VISION_URL`, `VITE_VISION_REMOTE=0` disables it)
+The capture app connects automatically (`VITE_VISION_URL`; `VITE_VISION_REMOTE=0` disables it; `VITE_VISION_WIDTH=1920` sends the camera's native frame instead of the 1280 px processing frame — every pixel of a far glyph, about twice the badge model's cost)
 and shows `vision: sidecar …` in the debug HUD; if the socket is down it says so and
 runs the in-browser BlazeFace + classical decoder instead, per frame, no restart.
 

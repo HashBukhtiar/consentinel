@@ -58,23 +58,36 @@ def iou(a, b) -> float:
     return inter / max(1e-6, (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter)
 
 
-def is_cool(img_bgr: np.ndarray, box) -> bool:
-    """MINT (opt-in) vs ROSE (opt-out): over the lit pixels of the box, is G above R?
-    The webcam's crosstalk keeps R ≈ 0.5 G on a mint bar (and G ≈ 0.5 R on rose), so the sign is safe."""
+def hue_score(img_bgr: np.ndarray, box) -> tuple[float, float]:
+    """(signed, total) chroma over the box's STROKE pixels: Σ(G−R) and Σ|G−R| where
+    |G−R| ≥ 30 and the pixel is lit. MINT strokes push the sign up, ROSE strokes
+    down; white (the L bar, an LED core) is G ≈ R and drops out. Picking "the
+    brightest pixels" instead let one saturated LED pixel set the threshold and
+    decide the colour on junk — measured on synthetic renders."""
     x0, y0, x1, y1 = [int(round(v)) for v in box]
     sub = img_bgr[max(0, y0):max(0, y1), max(0, x0):max(0, x1)].astype(np.int32)
     if sub.size == 0:
-        return True
-    peak = sub.max(axis=2)
-    lit = peak >= max(60, int(peak.max() * 0.6))
-    if not lit.any():
-        return True
-    return float(sub[..., 1][lit].mean()) >= float(sub[..., 2][lit].mean())
+        return 0.0, 0.0
+    g, r = sub[..., 1], sub[..., 2]
+    d = g - r
+    m = (np.abs(d) >= 30) & (np.maximum(g, r) >= 60)
+    if m.sum() < 4:
+        return 0.0, 0.0
+    return float(d[m].sum()), float(np.abs(d[m]).sum())
+
+
+def is_cool(img_bgr: np.ndarray, box) -> bool:
+    """MINT (opt-in) vs ROSE (opt-out) of one box, by the sign of its stroke chroma."""
+    signed, _ = hue_score(img_bgr, box)
+    return signed >= 0
+
+
+COLOR_CERTAINTY = 0.35  # |Σ(G−R)| / Σ|G−R| over the three glyphs; below this the consent colour is ambiguous → no reading (fail-safe)
 
 
 def group_keys(img_bgr: np.ndarray, dets: list[tuple[int, float, float, float, float, float]]):
     """dets: (cls, conf, x0, y0, x1, y1) in px. → (keys, digits) where each key
-    is a CRC-valid triple of digits read left to right."""
+    is a CRC-valid triple of digits read left to right with an unambiguous colour."""
     digits = [d for d in dets if d[0] != CLASS_KEY]
     key_boxes = [d for d in dets if d[0] == CLASS_KEY]
     # NMS across classes: two glyph guesses for one cell keep the confident one
@@ -87,21 +100,21 @@ def group_keys(img_bgr: np.ndarray, dets: list[tuple[int, float, float, float, f
     out = []
     n = len(kept)
     for i in range(n):
-        a = kept[i]
-        row = [a]
+        row = [kept[i]]
         j = i + 1
         while j < n and len(row) < 3:
             p, d = row[-1], kept[j]
             hp, hd = p[5] - p[3], d[5] - d[3]
-            wp = p[4] - p[2]
+            h = max(1e-6, min(hp, hd))
             vo = min(p[5], d[5]) - max(p[3], d[3])
-            gap = d[2] - p[4]
-            same_row = vo >= 0.5 * min(hp, hd) and 0.6 <= hd / max(1e-6, hp) <= 1.6
-            adjacent = -0.35 * wp <= gap <= 0.9 * wp
-            if same_row and adjacent:
+            # cells are 90 units apart over 160 tall (0.56 h); a '1' is boxed by its lit right
+            # bars only, which moves its centre ±0.2 h; ±30% for perspective → 0.2..1.05 h
+            dx = ((d[2] + d[4]) - (p[2] + p[4])) / 2 / h
+            same_row = vo >= 0.5 * h and 0.6 <= hd / max(1e-6, hp) <= 1.6
+            if same_row and 0.2 <= dx <= 1.05:
                 row.append(d)
                 j += 1
-            elif d[2] - p[4] > 0.9 * wp:
+            elif dx > 1.05:
                 break
             else:
                 j += 1
@@ -111,10 +124,16 @@ def group_keys(img_bgr: np.ndarray, dets: list[tuple[int, float, float, float, f
         bid = (key >> 4) & 0xFF
         if crc4(bid) != (key & 0xF):
             continue
+        signed = total = 0.0
+        for r in row:
+            s_, t_ = hue_score(img_bgr, r[2:])
+            signed += s_; total += t_
+        if total <= 0 or abs(signed) / total < COLOR_CERTAINTY:
+            continue  # digits fine, colour (= consent) ambiguous: refuse rather than guess
         box = (min(r[2] for r in row), min(r[3] for r in row), max(r[4] for r in row), max(r[5] for r in row))
         conf = min(r[1] for r in row)
         has_key = any(iou(box, k[2:]) > 0.3 for k in key_boxes)
-        out.append({"id": bid, "hex": f"{bid:02X}", "digits": [r[0] for r in row], "box": box, "conf": conf, "key": has_key, "optIn": is_cool(img_bgr, box)})
+        out.append({"id": bid, "hex": f"{bid:02X}", "digits": [r[0] for r in row], "box": box, "conf": conf, "key": has_key, "optIn": signed > 0, "colorCertainty": abs(signed) / total})
     # dedupe overlapping readings: the one with the whole-key box, then confidence
     out.sort(key=lambda k: (k["key"], k["conf"]), reverse=True)
     final = []
@@ -144,7 +163,9 @@ class Vision:
         t1 = time.perf_counter()
         keys, digits = [], []
         if self.keys is not None:
-            r = self.keys.predict(img, imgsz=self.key_imgsz, conf=self.key_conf, device=self.device, verbose=False)[0]
+            # native size by default (0): a 1920 px frame keeps every pixel of a far glyph; capped at 1920
+            imgsz = self.key_imgsz or min(1920, ((max(W, H) + 31) // 32) * 32)
+            r = self.keys.predict(img, imgsz=imgsz, conf=self.key_conf, device=self.device, verbose=False)[0]
             dets = [(int(c), float(p), float(b[0]), float(b[1]), float(b[2]), float(b[3]))
                     for b, c, p in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.cls.cpu().numpy(), r.boxes.conf.cpu().numpy())]
             ks, ds = group_keys(img, dets)
@@ -162,7 +183,7 @@ async def main():
     ap.add_argument("--faces", default=str(HERE / "models" / "yolov8x-face-lindevs.pt"))
     ap.add_argument("--keys", default=str(HERE / "models" / "badge-key.pt"))
     ap.add_argument("--face-imgsz", type=int, default=640)
-    ap.add_argument("--key-imgsz", type=int, default=1280)
+    ap.add_argument("--key-imgsz", type=int, default=0, help="0 = the frame's own size (≤ 1920)")
     ap.add_argument("--face-conf", type=float, default=0.35)
     ap.add_argument("--key-conf", type=float, default=0.30)
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
@@ -171,7 +192,7 @@ async def main():
     print(f"loading {Path(args.faces).name} + {Path(args.keys).name if Path(args.keys).exists() else '(no badge model yet: faces only)'} on {args.device} …", flush=True)
     v = Vision(Path(args.faces), Path(args.keys), args.device, args.face_imgsz, args.key_imgsz, args.face_conf, args.key_conf)
     _, _, _, ms = v.infer(np.zeros((720, 1280, 3), np.uint8))
-    print(f"ready: faces {ms['faces']:.0f} ms @ {args.face_imgsz} · badge {ms['keys']:.0f} ms @ {args.key_imgsz} · ws://{args.host}:{args.port}", flush=True)
+    print(f"ready: faces {ms['faces']:.0f} ms @ {args.face_imgsz} · badge {ms['keys']:.0f} ms @ {args.key_imgsz or 'native'} (1280 frame) · ws://{args.host}:{args.port}", flush=True)
 
     async def handle(ws):
         peer = getattr(ws, "remote_address", "?")

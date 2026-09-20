@@ -151,6 +151,7 @@ export const flags = {
   VISION_REMOTE: (env.VITE_VISION_REMOTE ?? "1") !== "0",
   VISION_URL: env.VITE_VISION_URL ?? "ws://127.0.0.1:8765",
   VISION_JPEG_QUALITY: Number(env.VITE_VISION_JPEG_QUALITY ?? 0.85), // what the sidecar sees; the glyphs are big and high-contrast
+  VISION_WIDTH: Number(env.VITE_VISION_WIDTH ?? 0), // width of the frame sent to the sidecar: 0 = PROCESS_WIDTH; 1920 = the camera's native frame (every pixel of a far glyph, ~2x the badge model's cost)
 
   // vision/perf (mine)
   // detection + decode input width; higher = badges decode from farther (costs CPU).
