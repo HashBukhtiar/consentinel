@@ -32,14 +32,20 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
   const st = cache.status;
   const records = cache.records();
   const walletPk = wallet?.publicKey?.toBase58() ?? null; // live: null again after a disconnect
-  const ago = (t: number) => (t ? `${Math.max(0, Math.round((Date.now() - t) / 1000))}s ago` : "never");
+  const ago = (t: number) => {
+    if (!t) return "never";
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    return `${Math.round(s / 3600)}h ago`;
+  };
   const short = (s: string) => (s ? `${s.slice(0, 4)}…${s.slice(-4)}` : "—");
 
   function signerFor(rec: ConsentView): { signer: TxSigner; via: string; secret?: Uint8Array } | null {
     const w = walletPk === rec.owner ? walletSigner(wallet as WalletProvider) : null;
     if (w) return { signer: w, via: "your wallet" };
     const s = keys?.owners.get(rec.owner);
-    return s ? { signer: s, via: "badge key (demo file)", secret: keys?.secrets.get(rec.owner) } : null;
+    return s ? { signer: s, via: "badge key", secret: keys?.secrets.get(rec.owner) } : null;
   }
 
   async function connectWallet() {
@@ -75,7 +81,7 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
       const dt = ((performance.now() - t0) / 1000).toFixed(1);
       const url = explorerUrl("tx", sig, cache.status.cluster);
       cache.note("tx", `${id} ${action} sent by operator (${s.via}) — confirmed in ${dt}s`, id, sig);
-      setBusy((b) => ({ ...b, [id]: { text: `confirmed in ${dt}s ✓`, url } }));
+      setBusy((b) => ({ ...b, [id]: { text: `confirmed in ${dt}s`, url } }));
       void cache.syncNow();
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
@@ -85,21 +91,16 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
   }
 
   const health = st.deployed === false || cache.stale ? "err" : st.lastError ? "warn" : st.freshAt && Date.now() - st.freshAt < flags.CONSENT_CACHE_SYNC_MS * 3 ? "ok" : "warn";
+  const syncText = st.deployed === false ? "not deployed" : cache.stale ? "stale" : st.lastSyncAt ? `synced ${ago(st.lastSyncAt)}` : "connecting…";
 
   return (
     <>
-      <h3>Consent <span className="muted">· Solana {st.cluster} · cache</span></h3>
-      <div className="chainbar">
-        <span className={"dot " + health} title={st.lastError || "synced"} />
-        <span>poll {ago(st.lastSyncAt)} · slot {st.lastSyncSlot || "—"}</span>
-        <span>· push {st.pushes ? ago(st.lastPushAt) : st.subscribed ? "none yet (poll covers it)" : "off"}</span>
-        <a href={st.programUrl} target="_blank" rel="noreferrer" title={st.programId}>program ↗</a>
-      </div>
-      {cache.stale && st.freshAt > 0 && <div className="chainerr">cache stale for {ago(st.freshAt)} — fail-safe: every beacon reads as unknown ⇒ all faces blurred until a sync lands</div>}
-      {st.deployed === false && <div className="chainerr">program {short(st.programId)} is not deployed on {st.cluster} — run <code>anchor deploy</code> + <code>npm run seed</code> (registry/)</div>}
-      {st.lastError && st.deployed !== false && <div className="chainerr">RPC: {st.lastError.slice(0, 120)} — cache keeps last known state{cache.stale ? "" : " (still fresh)"}; unknown ⇒ blur</div>}
+      <h3>Consent on-chain <span className="muted">{syncText}</span> <span className={"dot " + health} title={st.lastError || "synced"} /></h3>
+      {cache.stale && st.freshAt > 0 && <div className="chainerr">Cache stale for {ago(st.freshAt)} — fail-safe: every badge reads as unknown, so every face is blurred until a sync lands.</div>}
+      {st.deployed === false && <div className="chainerr">Program {short(st.programId)} isn't deployed on {st.cluster}. Run <code>anchor deploy</code> then <code>npm run seed</code> in registry/.</div>}
+      {st.lastError && st.deployed !== false && <div className="chainerr">RPC: {st.lastError.slice(0, 120)} — keeping last known state{cache.stale ? "" : " (still fresh)"}; unknown ⇒ blur.</div>}
 
-      {!records.length && st.deployed !== false && <div className="muted">no records yet — run <code>npm run seed</code> in registry/</div>}
+      {!records.length && st.deployed !== false && <div className="empty-row">No badges registered yet — run <code>npm run seed</code> in registry/.</div>}
       {records.map((r) => {
         const s = signerFor(r);
         const b = busy[r.badgeId];
@@ -108,53 +109,67 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
         const pending = !!b?.pending;
         return (
           <div className="rec" key={r.badgeId}>
-            <div className="rec-head">
-              <b>{r.badgeId}</b>
-              <span className={"pill " + (effective ? "opt_in" : "opt_out")}>{effective ? "opt_in" : "opt_out"}</span>
-              {ov && <span className="muted" title={`per-event override for ${flags.EVENT_ID} decides; base consent is ${r.consent ? "opt_in" : "opt_out"}`}>(event override)</span>}
-              <span className="muted">rev {r.revision} · {ago(r.updatedAt * 1000)}</span>
+            <div className="rec-main">
+              <div className="rec-id">
+                <b>{r.badgeId}</b>
+                <span className={"pill " + (effective ? "opt_in" : "opt_out")}>{effective ? "opt-in" : "opt-out"}</span>
+                {ov && <span className="muted small" title={`per-event override for ${flags.EVENT_ID}; base consent is ${r.consent ? "opt-in" : "opt-out"}`}>event override</span>}
+              </div>
+              <div className="rec-act">
+                {ov ? (
+                  <button className="toggle" disabled={!s || pending} onClick={() => act(r, "clear-override")} title="Remove the per-event override so the base consent applies">Clear override</button>
+                ) : effective ? (
+                  <button className="toggle opt_out" disabled={!s || pending} onClick={() => act(r, "revoke")}>Revoke</button>
+                ) : (
+                  <button className="toggle opt_in" disabled={!s || pending} onClick={() => act(r, "grant")}>Grant</button>
+                )}
+                <button className="toggle danger" disabled={!s || pending} onClick={() => act(r, "close")} title="Delete the record — rent returns to the owner; the app fail-safes to blur">Close</button>
+              </div>
             </div>
-            <div className="rec-meta muted">
-              owner {short(r.owner)} · {keys?.labels.get(r.badgeId) ?? ""}
-              {s ? <span className="via"> · signer: {s.via}</span> : <span className="via warn"> · no signer for this owner</span>}
-            </div>
-            <div className="rec-actions">
-              {ov ? (
-                <button className="toggle" disabled={!s || pending} onClick={() => act(r, "clear-override")} title="remove the per-event override so the base consent applies">clear override</button>
-              ) : (
-                <>
-                  <button className="toggle opt_in" disabled={!s || effective || pending} onClick={() => act(r, "grant")}>grant</button>
-                  <button className="toggle opt_out" disabled={!s || !effective || pending} onClick={() => act(r, "revoke")}>revoke</button>
-                </>
-              )}
-              <button className="toggle danger" disabled={!s || pending} onClick={() => act(r, "close")} title="delete the record — rent back to owner; app fail-safes to blur">close</button>
-              {b && (b.url ? <a className="status" href={b.url} target="_blank" rel="noreferrer">{b.text} ↗</a> : <span className={"status" + (b.err ? " err" : "")}>{b.text}</span>)}
+            <div className="rec-meta">
+              {s ? <span className="muted">signs with {s.via}</span> : <span className="warn">no signer for this owner</span>}
+              <span className="muted"> · rev {r.revision} · {ago(r.updatedAt * 1000)}</span>
+              {keys?.labels.get(r.badgeId) && <span className="muted"> · {keys.labels.get(r.badgeId)}</span>}
+              {b && (b.url
+                ? <a className="status" href={b.url} target="_blank" rel="noreferrer">{b.text} ↗</a>
+                : <span className={"status" + (b.err ? " err" : "")}>{b.text}</span>)}
             </div>
           </div>
         );
       })}
 
-      <div className="chainopts">
-        <label title="Badge signs a 49-byte message with its own key; the relayer pays; the program verifies the Ed25519 signature on-chain (no SOL on the badge). Untick to sign the transaction directly as the owner.">
-          <input type="checkbox" checked={delegated} disabled={!keys?.relayer} onChange={(e) => setDelegated(e.target.checked)} /> badge-signed + relayed
-        </label>
-        {wallet ? (
-          walletPk ? <span className="muted">wallet {short(walletPk)}</span> : <button className="toggle" onClick={connectWallet}>connect wallet</button>
-        ) : (
-          <span className="muted">no wallet extension</span>
-        )}
-        {walletErr && <span className="status err">{walletErr}</span>}
-      </div>
-
-      <h3>Chain activity <span className="muted">· ws push + poll</span></h3>
-      {cache.activity.slice(0, 8).map((a) => (
-        <div className={"act " + a.kind} key={a.id}>
-          <span className="t">{new Date(a.at).toLocaleTimeString()}</span>
-          <span className="x">{a.text}</span>
-          {a.url && <a href={a.url} target="_blank" rel="noreferrer">tx ↗</a>}
+      <details className="debug">
+        <summary>Advanced</summary>
+        <div className="chainopts">
+          <label title="The badge signs a 49-byte message with its own key; the relayer pays; the program verifies the Ed25519 signature on-chain (no SOL on the badge). Untick to sign the transaction directly as the owner.">
+            <input type="checkbox" checked={delegated} disabled={!keys?.relayer} onChange={(e) => setDelegated(e.target.checked)} /> badge-signed + relayed
+          </label>
+          {wallet ? (
+            walletPk ? <span className="muted">wallet {short(walletPk)}</span> : <button className="toggle" onClick={connectWallet}>Connect wallet</button>
+          ) : (
+            <span className="muted">no wallet extension</span>
+          )}
+          {walletErr && <span className="status err">{walletErr}</span>}
         </div>
-      ))}
-      {!cache.activity.length && <div className="muted">waiting for the first sync…</div>}
+        <div className="chainbar">
+          <span>poll {ago(st.lastSyncAt)}</span>
+          <span>slot {st.lastSyncSlot || "—"}</span>
+          <span>push {st.pushes ? ago(st.lastPushAt) : st.subscribed ? "none yet" : "off"}</span>
+          <a href={st.programUrl} target="_blank" rel="noreferrer" title={st.programId}>program ↗</a>
+        </div>
+      </details>
+
+      <details className="debug">
+        <summary>Chain activity {cache.activity.length ? <span className="muted">{cache.activity.length}</span> : null}</summary>
+        {cache.activity.slice(0, 8).map((a) => (
+          <div className={"act " + a.kind} key={a.id}>
+            <span className="t">{new Date(a.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+            <span className="x">{a.text}</span>
+            {a.url && <a href={a.url} target="_blank" rel="noreferrer">tx ↗</a>}
+          </div>
+        ))}
+        {!cache.activity.length && <div className="empty-row">Waiting for the first sync…</div>}
+      </details>
     </>
   );
 }
