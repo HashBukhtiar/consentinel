@@ -30,6 +30,9 @@ export class RemoteVision {
   latest: RemoteResult | null = null;
   /** smoothed round trip (encode + transfer + inference), ms */
   rttMs = 0;
+  /** …of which: JPEG encode in the browser, and the sidecar's own time (its ms.total) — smoothed */
+  encodeMs = 0;
+  serverMs = 0;
   frames = 0;
 
   constructor(private url = flags.VISION_URL) {
@@ -52,6 +55,8 @@ export class RemoteVision {
         this.frames++;
         const rtt = r.receivedMs - this.sentAt;
         this.rttMs = this.rttMs ? this.rttMs * 0.8 + rtt * 0.2 : rtt;
+        const srv = r.ms?.total ?? 0;
+        this.serverMs = this.serverMs ? this.serverMs * 0.8 + srv * 0.2 : srv;
       } catch { /* malformed: ignore */ }
     };
     ws.onclose = ws.onerror = () => {
@@ -69,19 +74,27 @@ export class RemoteVision {
 
   /** Offer this frame. Sent only when nothing is in flight; otherwise dropped. */
   submit(canvas: HTMLCanvasElement, tMs: number): void {
-    if (!this.connected || this.inFlight || !this.ws) return;
+    if (!this.connected || this.inFlight || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const t0 = performance.now();
+    // toDataURL, not toBlob/convertToBlob: Chromium runs those as IDLE tasks with a
+    // one-second fallback, and a loop that draws every frame leaves no idle time —
+    // measured 1000–1500 ms per encode. The synchronous encoder takes 3–4 ms for
+    // a 1280 px frame, and the base64 round trip about 1 ms more.
+    let jpeg: Uint8Array;
+    try {
+      const url = canvas.toDataURL("image/jpeg", flags.VISION_JPEG_QUALITY);
+      const bin = atob(url.slice(url.indexOf(",") + 1));
+      jpeg = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) jpeg[i] = bin.charCodeAt(i);
+    } catch { return; } // a tainted canvas or a blocked readback: stay on the fallback path
+    const buf = new ArrayBuffer(8 + jpeg.byteLength);
+    new DataView(buf).setFloat64(0, tMs, true);
+    new Uint8Array(buf, 8).set(jpeg);
+    const enc = performance.now() - t0;
+    this.encodeMs = this.encodeMs ? this.encodeMs * 0.8 + enc * 0.2 : enc;
     this.inFlight = true;
-    this.sentAt = performance.now();
-    canvas.toBlob((blob) => {
-      if (!blob || !this.ws || this.ws.readyState !== WebSocket.OPEN) { this.inFlight = false; return; }
-      blob.arrayBuffer().then((jpeg) => {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) { this.inFlight = false; return; }
-        const buf = new ArrayBuffer(8 + jpeg.byteLength);
-        new DataView(buf).setFloat64(0, tMs, true);
-        new Uint8Array(buf, 8).set(new Uint8Array(jpeg));
-        this.ws.send(buf);
-      }).catch(() => { this.inFlight = false; });
-    }, "image/jpeg", flags.VISION_JPEG_QUALITY);
+    this.sentAt = t0;
+    this.ws.send(buf);
   }
 
   /** The newest result not yet consumed by the loop (each result is handed out once). */

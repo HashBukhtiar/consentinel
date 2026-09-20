@@ -86,7 +86,7 @@ export class Pipeline {
   }
 
   private visionLabel(remote: RemoteVision | null): string {
-    if (remote) return `sidecar yolov8x-face + badge-key · rtt ${remote.rttMs.toFixed(0)} ms`;
+    if (remote) return `sidecar yolov8x-face + badge-key · rtt ${remote.rttMs.toFixed(0)} ms (encode ${remote.encodeMs.toFixed(0)} · server ${remote.serverMs.toFixed(0)} · wire ${Math.max(0, remote.rttMs - remote.encodeMs - remote.serverMs).toFixed(0)})`;
     if (this.remote) return `sidecar down (${flags.VISION_URL}) → in-browser blazeface + classical`;
     return "in-browser blazeface + classical";
   }
