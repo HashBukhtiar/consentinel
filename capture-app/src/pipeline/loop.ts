@@ -5,6 +5,7 @@ import { associate } from "../vision/associate";
 import { pixelate } from "../vision/blur";
 import { decide } from "../consent/decide";
 import { FilmEmitter } from "../events/filmEvent";
+import { consentRequester } from "../events/consentRequest";
 import { decodeBeacons as stubDecode } from "../stubs/decodeBeacons";
 import { decodeBeacons as opticalDecode, lastDebug, type BeaconDebug } from "../decode/beacon";
 import { getConsent } from "../consent/store";
@@ -105,6 +106,8 @@ export class Pipeline {
       beacons = traceStage("decode", () => decodeBeacons(imageData, tMs));
       traceStage("associate", () => associate(tracks, beacons));
       traceStage("decide", () => decide(tracks, getConsent)); // sync read of the Solana-synced cache
+      // the badge's A button, over light: relay a flag that disagrees with the chain (debounced, fire-and-forget)
+      traceStage("request", () => { for (const b of beacons) if (b.consentRequest !== undefined) consentRequester.observe(b.beaconId, b.consentRequest, getConsent(b.beaconId)); });
       traceStage("blur+notify", () => {
         for (const t of tracks) {
           if (t.blurred) {
@@ -204,7 +207,8 @@ function drawOverlay(
       ctx.strokeStyle = "#37d67a";
       if (cand) ctx.strokeRect(cand.box.x * sx - 3, cand.box.y * sy - 3, cand.box.w * sx + 6, cand.box.h * sy + 6);
       else ctx.strokeRect(cx - 24, cy - 12, 48, 24);
-      label(cand ? cand.box.x * sx - 3 : cx - 24, (cand ? cand.box.y * sy - 3 : cy - 12) - 2, `badge ${b.beaconId}${bound ? " → " + bound.trackId : " · no face above it"}`, "#37d67a");
+      const flag = b.consentRequest === undefined ? "" : b.consentRequest ? " · OPT-IN" : " · OPT-OUT";
+      label(cand ? cand.box.x * sx - 3 : cx - 24, (cand ? cand.box.y * sy - 3 : cy - 12) - 2, `badge ${b.beaconId}${flag}${bound ? " → " + bound.trackId : " · no face above it"}`, "#37d67a");
       void tr;
     }
   }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { consentStore } from "../stubs/consentStore";
-import { chain } from "../consent/store";
+import { chain, getConsent } from "../consent/store";
+import { consentRequester } from "../events/consentRequest";
 import { operatorLink, type OperatorMessage } from "../events/operatorLink";
 import { ChainPanel } from "./ChainPanel";
 import type { BeaconDebug } from "../decode/beacon";
@@ -81,10 +82,20 @@ export function OperatorPanel({ fps, source, tracks, events, beacons, debug, dec
       <h3>Beacons <span className="muted">· {decoder === "stub" ? "stub (fake A1/C3)" : `optical · ${debug?.width ?? flags.PROCESS_WIDTH}px`}</span></h3>
       {beacons.map((b) => {
         const bound = tracks.find((t) => t.beaconId === b.beaconId);
+        const onChain = getConsent(b.beaconId);
+        const rq = consentRequester.status(b.beaconId);
+        let flag: string | null = null;
+        if (b.consentRequest !== undefined) {
+          const says = `badge says ${b.consentRequest ? "OPT-IN" : "OPT-OUT"}`;
+          if (onChain === "unknown") flag = `${says} · no record yet (enrolling…)`;
+          else if ((onChain === "opt_in") === b.consentRequest) flag = `${says} · matches chain`;
+          else flag = `${says} · chain ${onChain} → ${rq?.inFlight ? "relaying…" : rq?.last ? rq.last : "requesting…"}`;
+        }
         return (
-          <div className="row" key={b.beaconId}>
+          <div className="row" key={b.beaconId} style={{ flexWrap: "wrap", gap: "0 8px" }}>
             <span><b className="c-opt_in">{b.beaconId}</b> at {Math.round(b.imagePosition.x * 100)}%,{Math.round(b.imagePosition.y * 100)}%</span>
             <b className={bound ? "" : "muted"}>{bound ? `→ ${bound.trackId}` : "no face above it"}</b>
+            {flag && <span className="muted" style={{ width: "100%" }}>{flag}</span>}
           </div>
         );
       })}
@@ -99,7 +110,7 @@ export function OperatorPanel({ fps, source, tracks, events, beacons, debug, dec
               <td>{t.trackId}</td>
               <td>{t.beaconId ?? "—"}</td>
               <td className={"c-" + t.consent}>{t.consent}</td>
-              <td>{t.blurred ? "🟥 blurred" : "🟩 clear"}</td>
+              <td>{t.blurred ? (t.consent === "opt_in" && t.beaconRequest === false ? "🟥 blurred · badge says OPT-OUT" : "🟥 blurred") : "🟩 clear"}</td>
             </tr>
           ))}
           {!tracks.length && <tr><td colSpan={4} className="muted">no faces</td></tr>}

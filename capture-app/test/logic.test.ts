@@ -28,7 +28,18 @@ decide(tracks, get);
 assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, false, "opt_in ⇒ clear");
 assert.equal(tracks.find((t) => t.trackId === "L")!.blurred, true, "no beacon ⇒ blur");
 
-console.log("ok — tracker identity, association, fail-safe blur");
+// 3b) the badge's own flag can only add privacy: OPT-OUT on the light forces a blur even on chain opt_in,
+//     OPT-IN on the light never clears without the chain
+associate(tracks, [{ beaconId: "X", imagePosition: { x: 0.65, y: 0.7 }, confidence: 1, consentRequest: false }]);
+decide(tracks, get);
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, true, "badge says OPT-OUT ⇒ blur even though chain says opt_in");
+associate(tracks, [{ beaconId: "X", imagePosition: { x: 0.65, y: 0.7 }, confidence: 1, consentRequest: true }]);
+decide(tracks, get);
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, false, "badge OPT-IN + chain opt_in ⇒ clear");
+decide(tracks, () => "opt_out");
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, true, "badge OPT-IN alone never clears: the chain decides");
+
+console.log("ok — tracker identity, association, fail-safe blur, light flag only adds privacy");
 
 // 4) chain cache semantics (no network: autoFetch off, synthetic snapshots)
 import { ChainConsentCache } from "../src/consent/chainCache";

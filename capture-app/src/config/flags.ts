@@ -25,6 +25,11 @@ export const flags = {
   // a decoded badge with no record ⇒ ask the service to register it as opt_out (its card then appears)
   AUTO_REGISTER_UNKNOWN: (env.VITE_AUTO_REGISTER ?? "1") !== "0",
   FILM_EVENT_DEBOUNCE_MS: 5000,
+  // The camera as the badge's radio bridge: when the light's consent flag
+  // disagrees with the chain, send the badge's CNSR request to the service.
+  OPTICAL_REQUESTS: (env.VITE_OPTICAL_REQUESTS ?? "1") !== "0",
+  REQUEST_STABLE_MS: 1500, // the flag must read the same for this long (a button press mid-frame is not a request)
+  REQUEST_MIN_INTERVAL_MS: 8000, // per badge; a stale nonce/409 is simply retried next interval
 
   // owned by A — shared contract value
   BEACON_SYMBOL_HZ: 10,

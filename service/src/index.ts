@@ -205,7 +205,8 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (p === "/bridge/uplink" && req.method === "POST") {
       const body = await readJson(req, res);
       const frame = typeof body === "string" ? body : (body as any)?.frame;
-      const r = await radio.uplink(frame, "http");
+      const via = typeof body === "object" && body && typeof (body as any).via === "string" ? String((body as any).via).slice(0, 16) : "http";
+      const r = await radio.uplink(frame, via); // via "optical" = the capture app read the request off the badge's light
       return json(r.result === "error" ? (r.status ?? 500) : 200, r);
     }
     let m: RegExpMatchArray | null;

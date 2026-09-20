@@ -15,6 +15,6 @@ export function associate(tracks: Track[], beacons: BeaconReading[]): void {
       const d = dx * dx + dy * dy;
       if (d < bestD) { bestD = d; best = t; }
     }
-    if (best) best.beaconId = b.beaconId;
+    if (best) { best.beaconId = b.beaconId; best.beaconRequest = b.consentRequest; }
   }
 }
