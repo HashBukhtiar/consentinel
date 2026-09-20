@@ -1,2 +1,4 @@
 .DS_Store
 data/audit/
+# large test recordings (badge clips) — keep out of the repo
+Media/

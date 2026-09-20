@@ -25,7 +25,10 @@ function boxLum(f: Frame, cx: number, cy: number, hw: number, hh: number): numbe
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const o = (y * f.width + x) * 4;
-      sum += 0.299 * f.data[o] + 0.587 * f.data[o + 1] + 0.114 * f.data[o + 2];
+      // "whiteness" = min channel: white cells are achromatic (high in all
+      // channels), the blue background is chromatic (low R), so this separates
+      // them even when the blue is bright/over-exposed (luma does not).
+      sum += Math.min(f.data[o], f.data[o + 1], f.data[o + 2]);
       cnt++;
     }
   }
