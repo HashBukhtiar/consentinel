@@ -1,0 +1,4 @@
+# The badge IDE pushes this file byte-for-byte over WebSerial; CR bytes have
+# corrupted a token mid-push. Keep firmware LF in the working tree, not just in git.
+# Keep it ASCII too -- non-ASCII has no reason to be in a 48 KB Lua app.
+*.lua text eol=lf
