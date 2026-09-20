@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { _internal, rejectReason, decoderStats } from "../src/decode/beacon";
 import { flags } from "../src/config/flags";
 import { ALPHABET_NAMES, lumaOf } from "@shared/beacon";
+import { remoteKeyFrame } from "../src/decode/remoteKey";
+import type { RemoteResult } from "../src/vision/remote";
 
 const dir = process.argv[2];
 if (!dir || !existsSync(join(dir, "index.json"))) { console.error("usage: tsx scripts/replay.ts <data/diag/<ts>-seq> [processWidth]"); process.exit(2); }
@@ -44,6 +46,37 @@ const makeSampler = (native: ImageData) => (nx: number, ny: number, nw: number, 
   return { data: out, width: dw, height: dh } as unknown as ImageData;
 };
 const fine = process.env.REPLAY_FINE !== "0" && index.width > procW;
+
+// REPLAY_REMOTE=1: the frames go to the vision sidecar (vision/server.py, YOLO) instead
+// of the classical engine, and its readings run through the same confirm/hold logic.
+if (process.env.REPLAY_REMOTE === "1") {
+  const url = process.env.VISION_URL ?? "ws://127.0.0.1:8765";
+  const ws = new WebSocket(url);
+  await new Promise<void>((ok, bad) => { ws.onopen = () => ok(); ws.onerror = () => bad(new Error(`cannot reach ${url} — start vision/server.py`)); });
+  const ask = (jpeg: Buffer, tMs: number): Promise<RemoteResult> => new Promise((ok) => {
+    ws.onmessage = (ev) => { const r = JSON.parse(String(ev.data)) as RemoteResult; r.receivedMs = 0; ok(r); };
+    const buf = new ArrayBuffer(8 + jpeg.byteLength);
+    new DataView(buf).setFloat64(0, tMs, true);
+    new Uint8Array(buf, 8).set(jpeg);
+    ws.send(buf);
+  });
+  console.log(`${index.frames.length} frames, stored ${index.width}px wide → sidecar ${url} · CONFIRM_N=${flags.KEY_CONFIRM_N}`);
+  const dec = _internal.newKeyDecoder();
+  const seen = new Map<string, number>();
+  let firstAt = -1, ms = 0, faces = 0, wrong = 0;
+  for (const fr of index.frames) {
+    const r = await ask(readFileSync(join(dir, fr.file)), fr.tMs);
+    const kf = remoteKeyFrame(r, r.w, r.h);
+    const out = dec.ingest(kf.fits, kf.seen, r.w, r.h, fr.tMs, kf.candidates, r.ms.keys);
+    ms += r.ms.total; faces += r.faces.length;
+    for (const o of out) { seen.set(o.beaconId, (seen.get(o.beaconId) ?? 0) + 1); if (firstAt < 0) firstAt = fr.tMs; }
+    const desc = kf.candidates.slice(0, 3).map((c) => `${Math.round(c.box.w)}x${Math.round(c.box.h)} ${c.status}`);
+    console.log(`t=${String(fr.tMs).padStart(5)}  faces=${r.faces.length} ${desc.join(" | ") || "-"}${out.length ? "   ⇒ " + out.map((o) => `${o.beaconId} ${o.optIn ? "OPT-IN" : "OPT-OUT"}`).join(",") : ""}`);
+  }
+  ws.close();
+  console.log(`\nreadings: ${[...seen.entries()].map(([id, n]) => `${id}×${n}`).join(", ") || "NONE"}${firstAt >= 0 ? ` (first at ${firstAt} ms)` : ""} · avg sidecar ${(ms / index.frames.length).toFixed(1)} ms · avg faces ${(faces / index.frames.length).toFixed(1)}`);
+  process.exit(0);
+}
 
 if (flags.BEACON_OPTICAL_MODE === "key") {
   // the static-key engine: per frame, the largest candidates with the decoder's own verdict

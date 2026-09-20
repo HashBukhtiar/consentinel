@@ -4,3 +4,13 @@ data/audit/
 Media/
 # 📸 diag snapshots from the capture app (frames of real people) — never commit
 data/diag/
+# vision sidecar: the venv, the 130 MB face weights, training data/runs (the trained badge-key.pt IS committed)
+vision/.venv/
+vision/models/yolov8x-face-lindevs.pt
+vision/models/*.onnx
+vision/badgekey/data/
+vision/badgekey/runs/
+vision/badgekey/train.log
+vision/server.log
+yolov8n.pt
+runs/

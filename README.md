@@ -225,7 +225,10 @@ npm install && npm run dev            # http://localhost:8787/health
 # terminal 2 — capture app
 cd capture-app && npm install && npm run setup && npm run dev   # http://localhost:5173
 
-# terminal 3 (optional) — badge radio bridge, or your keyboard standing in for it
+# terminal 3 — vision sidecar: YOLOv8x-face + the badge digit model on the laptop GPU (Apple MPS)
+cd vision && ./setup.sh && .venv/bin/python server.py           # ws://127.0.0.1:8765; the app falls back to in-browser BlazeFace + the classical decoder when this is down
+
+# terminal 4 (optional) — badge radio bridge, or your keyboard standing in for it
 cd service && npm run bridge -- --port /dev/cu.usbserial-XXXX     # ESP32 dev board
 cd service && npm run bridge -- --stdin                            # type CNSR4E1 ⏎ = badge A button
 ```
@@ -286,6 +289,6 @@ Service flags: `service/.env.example` (`SERVICE_TOKEN`, `CORS_ORIGIN`,
 
 ## Licenses / credits
 
-MediaPipe (Apache-2.0), Anchor (Apache-2.0), `@solana/web3.js` (MIT),
+MediaPipe (Apache-2.0), Ultralytics YOLOv8 (AGPL-3.0) and the lindevs YOLOv8-Face weights (WIDER FACE), Anchor (Apache-2.0), `@solana/web3.js` (MIT),
 `@noble/hashes` (MIT), `tweetnacl` (Unlicense), `ws` (MIT), React (MIT), Vite (MIT).
 ElevenLabs API for the spoken alerts.

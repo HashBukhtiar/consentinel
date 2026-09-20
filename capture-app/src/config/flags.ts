@@ -144,6 +144,13 @@ export const flags = {
   // pass; a quadrant crop makes it 1.7x bigger. The tracker bridges the frames
   // between visits (TRACK_MAX_MISSED). Costs one extra inference per frame.
   DETECT_TILES: (env.VITE_DETECT_TILES ?? "1") !== "0",
+  // The vision sidecar (vision/server.py): YOLOv8x-face + the YOLO badge-glyph model on
+  // the laptop's GPU over a local WebSocket. When it is reachable, faces and badge
+  // readings come from it (one frame in flight, results ≤ 1 round trip stale); when it
+  // is not, the loop uses the in-browser BlazeFace + classical decoder below, unchanged.
+  VISION_REMOTE: (env.VITE_VISION_REMOTE ?? "1") !== "0",
+  VISION_URL: env.VITE_VISION_URL ?? "ws://127.0.0.1:8765",
+  VISION_JPEG_QUALITY: Number(env.VITE_VISION_JPEG_QUALITY ?? 0.85), // what the sidecar sees; the glyphs are big and high-contrast
 
   // vision/perf (mine)
   // detection + decode input width; higher = badges decode from farther (costs CPU).

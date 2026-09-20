@@ -26,7 +26,9 @@ import type { BeaconReading, DecodeBeacons } from "../shared/schema";
 import { SAMPLE_BOX_FRAC } from "./patch";
 import { flags } from "../config/flags";
 import { SeqDecoder } from "./seq";
-import { KeyDecoder } from "./key";
+import { KeyDecoder, type KeyDebug } from "./key";
+import { remoteKeyFrame } from "./remoteKey";
+import type { RemoteResult } from "../vision/remote";
 
 type Frame = ImageData; // uses only .data/.width/.height
 type Box = { x: number; y: number; w: number; h: number };
@@ -317,9 +319,7 @@ const colorDecoder = new BeaconDecoder();
 const seqDecoder = new SeqDecoder();
 const keyDecoder = new KeyDecoder();
 
-function keyDecode(frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] {
-  const out = keyDecoder.decode(frame, tMs, sampler);
-  const d = keyDecoder.debug;
+function publishKeyDebug(d: KeyDebug): void {
   // the overlay draws the candidates: once a key is read, only the read ones (the
   // rejected blobs — a green shirt, a red chair — are noise then); when nothing
   // reads they stay, as the answer to "what does it see?"
@@ -330,6 +330,30 @@ function keyDecode(frame: ImageData, tMs: number, sampler?: RegionSampler): Beac
     candidates: shown.map((c) => ({ box: c.fit ? c.fit.key : c.box, borderLum: 0, confident: !!c.fit, symbol: null, label: c.status })),
     tracks: d.tracks.map((t) => ({ cx: t.cx, cy: t.cy, lastId: t.lastId, sinceDecodeMs: t.sinceDecodeMs, missed: t.missed })),
   };
+}
+
+function keyDecode(frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] {
+  const out = keyDecoder.decode(frame, tMs, sampler);
+  publishKeyDebug(keyDecoder.debug);
+  return out;
+}
+
+/**
+ * The sidecar's readings for one frame (vision/server.py: YOLO glyphs grouped
+ * into CRC-valid keys) through the SAME confirm / hold / track logic as the
+ * classical engine. W×H = the frame the result's boxes are normalized to.
+ */
+export function decodeBeaconsRemote(r: RemoteResult, W: number, H: number, tMs: number): BeaconReading[] {
+  const fr = remoteKeyFrame(r, W, H);
+  const out = keyDecoder.ingest(fr.fits, fr.seen, W, H, tMs, fr.candidates, r.ms?.keys ?? 0);
+  publishKeyDebug(keyDecoder.debug);
+  return out;
+}
+
+/** Between sidecar results: the ids still within their hold, nothing new ingested. */
+export function heldBeacons(W: number, H: number, tMs: number): BeaconReading[] {
+  const out = keyDecoder.readings(W, H, tMs);
+  publishKeyDebug(keyDecoder.debug);
   return out;
 }
 

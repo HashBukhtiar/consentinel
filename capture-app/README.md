@@ -72,7 +72,9 @@ Contracts live in [`src/shared/schema.ts`](src/shared/schema.ts):
 src/sources/videoSource.ts   camera | screen | file → one HTMLVideoElement
 src/decode/beacon.ts         optical decoder: patch → cells → clock → decodeFrame (A's wire format)
 src/decode/patch.ts          patch geometry + pixel paint (shared by decoder & self-check)
-src/vision/detect.ts         MediaPipe BlazeFace (detection only, no identity)
+src/vision/detect.ts         MediaPipe BlazeFace (detection only, no identity) — the in-browser fallback
+src/vision/remote.ts         client for the YOLO sidecar (vision/server.py): YOLOv8x-face + badge glyph model on the GPU
+src/decode/remoteKey.ts      the sidecar's CRC-valid key readings → the classical decoder's confirm/hold (key.ts ingest)
 src/vision/track.ts          IOU tracker → stable trackId, persists blur on occlusion
 src/vision/associate.ts      beacon → nearest face above, sticky on the track
 src/vision/blur.ts           canvas-2D pixelation

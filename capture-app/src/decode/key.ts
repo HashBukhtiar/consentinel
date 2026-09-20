@@ -545,10 +545,10 @@ export class KeyDecoder {
   decode(f: Frame, tMs: number, sampler?: RegionSampler): BeaconReading[] {
     const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
     const t0 = now();
-    const dbg: KeyDebug = { width: f.width, height: f.height, candidates: [], tracks: [], ms: 0, locateMs: 0 };
+    const candidates: KeyCandidate[] = [];
     const fits: KeyFit[] = [];
     const clusters = locateKeys(f, tophatWin(f.width));
-    dbg.locateMs = now() - t0;
+    const locateMs = now() - t0;
     let tried = 0;
     for (const cl of clusters) {
       const b = cl.box;
@@ -568,10 +568,22 @@ export class KeyDecoder {
         tried++;
         status = fit ? `${hex2(fit.id)} ${fit.optIn ? "OPT-IN" : "OPT-OUT"} · margin ${fit.margin.toFixed(2)}` : `${cl.cls === 1 ? "mint" : "rose"} blob, no key read (${b.w} px)`;
       }
-      dbg.candidates.push({ box: b, cls: cl.cls, status, fit });
+      candidates.push({ box: b, cls: cl.cls, status, fit });
       if (fit) fits.push(fit);
     }
+    const out = this.ingest(fits, clusters.map((cl) => ({ box: cl.box, cls: cl.cls })), f.width, f.height, tMs, candidates);
+    this.debug.ms = now() - t0;
+    this.debug.locateMs = locateMs;
+    return out;
+  }
 
+  /**
+   * Fits of this frame (from the classical fit above, or the sidecar's YOLO
+   * readings via remoteKey.ts) → tracks → confirmed, held readings. `seen` is
+   * every blob/glyph of a hue the frame showed, read or not: a confirmed badge
+   * whose box is still covered by one keeps its id (see below).
+   */
+  ingest(fits: KeyFit[], seen: { box: Box; cls: KeyClass }[], W: number, H: number, tMs: number, candidates: KeyCandidate[] = [], ms = 0): BeaconReading[] {
     // tracks: nearest centre; an id must repeat before it is trusted
     const unmatched = new Set(this.tracks);
     for (const fit of fits) {
@@ -596,25 +608,30 @@ export class KeyDecoder {
       if (tr.lastId === null) continue;
       const kb: Box = { x: tr.cx - tr.w / 2, y: tr.cy - tr.h / 2, w: tr.w, h: tr.h };
       const cls: KeyClass = tr.lastOptIn ? 1 : 2;
-      const seen = clusters.find((cl) => cl.cls === cls && overlapFrac(cl.box, kb) >= flags.KEY_SEEN_OVERLAP);
-      if (!seen) continue;
-      tr.seenMs = tMs; tr.cx = seen.box.x + seen.box.w / 2; tr.cy = seen.box.y + seen.box.h / 2; tr.missed = 0;
+      const blob = seen.find((s) => s.cls === cls && overlapFrac(s.box, kb) >= flags.KEY_SEEN_OVERLAP);
+      if (!blob) continue;
+      tr.seenMs = tMs; tr.cx = blob.box.x + blob.box.w / 2; tr.cy = blob.box.y + blob.box.h / 2; tr.missed = 0;
       unmatched.delete(tr);
     }
     for (const tr of unmatched) tr.missed++;
     this.tracks = this.tracks.filter((tr) => tr.missed <= flags.BEACON_TRACK_MISS);
+    this.debug = { width: W, height: H, candidates, tracks: [], ms, locateMs: 0 };
+    return this.readings(W, H, tMs);
+  }
 
+  /** The readings held right now (no new frame): the confirmed ids within their hold. */
+  readings(W: number, H: number, tMs: number): BeaconReading[] {
     const out: BeaconReading[] = [];
+    this.debug.tracks = [];
+    this.debug.width = W; this.debug.height = H;
     for (const tr of this.tracks) {
-      dbg.tracks.push({ cx: tr.cx, cy: tr.cy, lastId: tr.lastId, sinceDecodeMs: tr.lastId === null ? Infinity : tMs - tr.lastMs, missed: tr.missed });
+      this.debug.tracks.push({ cx: tr.cx, cy: tr.cy, lastId: tr.lastId, sinceDecodeMs: tr.lastId === null ? Infinity : tMs - tr.lastMs, missed: tr.missed });
       const since = tMs - tr.lastMs;
       const held = since < flags.BEACON_ID_HOLD_MS || (since < flags.KEY_HOLD_SEEN_MS && tMs - tr.seenMs < flags.KEY_SEEN_TTL_MS);
       if (tr.lastId !== null && held) {
-        out.push({ beaconId: hex2(tr.lastId), imagePosition: { x: tr.cx / f.width, y: tr.cy / f.height }, confidence: 1, optIn: tr.lastOptIn });
+        out.push({ beaconId: hex2(tr.lastId), imagePosition: { x: tr.cx / W, y: tr.cy / H }, confidence: 1, optIn: tr.lastOptIn });
       }
     }
-    dbg.ms = now() - t0;
-    this.debug = dbg;
     return out;
   }
 

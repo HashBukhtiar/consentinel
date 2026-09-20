@@ -1,5 +1,6 @@
 import { FaceDetector } from "@mediapipe/tasks-vision";
-import { createDetector, detectFaces } from "../vision/detect";
+import { createDetector, detectFaces, type RawFace } from "../vision/detect";
+import { RemoteVision } from "../vision/remote";
 import { Tracker } from "../vision/track";
 import { associate } from "../vision/associate";
 import { pixelate, pixelateAll, clearWindow } from "../vision/blur";
@@ -7,7 +8,7 @@ import { decide } from "../consent/decide";
 import { FilmEmitter } from "../events/filmEvent";
 import { consentRequester } from "../events/consentRequest";
 import { decodeBeacons as stubDecode } from "../stubs/decodeBeacons";
-import { decodeBeacons as opticalDecode, lastDebug, type BeaconDebug } from "../decode/beacon";
+import { decodeBeacons as opticalDecode, decodeBeaconsRemote, heldBeacons, lastDebug, type BeaconDebug } from "../decode/beacon";
 import { getConsent } from "../consent/store";
 import { flags } from "../config/flags";
 import { obsEnabled, traceFrame, traceStage, logConsent } from "../obs/sentry";
@@ -21,6 +22,7 @@ export interface PipelineState {
   debug: BeaconDebug | null; // optical decoder diagnostics (null for the stub)
   procWidth: number;
   stageMs: Record<string, number>; // smoothed per-stage cost of the last frames (grab, detect, decode, blur, total)
+  vision: string; // which engines are looking at the frame right now (sidecar YOLO, or in-browser fallback)
 }
 
 // The hot loop. Order: draw → detect → track → decode beacons → associate →
@@ -28,6 +30,7 @@ export interface PipelineState {
 // network or chain; the only async is one-time detector init.
 export class Pipeline {
   private detector!: FaceDetector;
+  private remote: RemoteVision | null = null; // the YOLO sidecar, when enabled (falls back per frame when it is down)
   private tracker = new Tracker();
   private emitter: FilmEmitter;
   private detectCanvas = document.createElement("canvas");
@@ -68,7 +71,8 @@ export class Pipeline {
   }
 
   async start(): Promise<void> {
-    this.detector = await createDetector();
+    this.detector = await createDetector(); // the in-browser fallback stays loaded even with the sidecar up
+    if (flags.VISION_REMOTE) this.remote = new RemoteVision();
     this.running = true;
     this.loop();
   }
@@ -76,6 +80,14 @@ export class Pipeline {
   stop(): void {
     this.running = false;
     cancelAnimationFrame(this.raf);
+    this.remote?.close();
+    this.remote = null;
+  }
+
+  private visionLabel(remote: RemoteVision | null): string {
+    if (remote) return `sidecar yolov8x-face + badge-key · rtt ${remote.rttMs.toFixed(0)} ms`;
+    if (this.remote) return `sidecar down (${flags.VISION_URL}) → in-browser blazeface + classical`;
+    return "in-browser blazeface + classical";
   }
 
   private loop = (): void => {
@@ -124,11 +136,23 @@ export class Pipeline {
     };
 
     const optical = flags.BEACON_DECODER === "optical";
+    // The sidecar: offer it this frame (dropped if one is still in flight) and take
+    // whatever result has come back. Between results the tracks stand as they are
+    // (≤ one round trip, ~2 frames, stale) and the decoder's holds keep ticking.
+    const remote = this.remote?.connected ? this.remote : null;
+    if (remote) remote.submit(this.detectCanvas, tMs);
+    const res = remote ? remote.take() : null;
+    if (remote) this.stageMs.sidecar = remote.rttMs; else delete this.stageMs.sidecar;
     let beacons: BeaconReading[] = [];
     const runStages = (): Track[] => {
-      const faces = this.timed("detect", () => detectFaces(this.detector, this.detectCanvas, tMs));
-      const tracks = traceStage("track", () => this.tracker.update(faces));
-      beacons = this.timed("decode", () => (optical ? opticalDecode(imageData, tMs, sampleRegion) : stubDecode(imageData, tMs)));
+      let faces: RawFace[] | null = null;
+      if (remote) { if (res) faces = res.faces.map((f) => ({ x: f.x, y: f.y, w: f.w, h: f.h })); }
+      else faces = this.timed("detect", () => detectFaces(this.detector, this.detectCanvas, tMs));
+      const tracks = traceStage("track", () => (faces ? this.tracker.update(faces) : this.tracker.current()));
+      beacons = this.timed("decode", () => (
+        !optical ? stubDecode(imageData, tMs)
+          : remote ? (res ? decodeBeaconsRemote(res, procW, procH, tMs) : heldBeacons(procW, procH, tMs))
+            : opticalDecode(imageData, tMs, sampleRegion)));
       traceStage("associate", () => associate(tracks, beacons, tMs));
       traceStage("decide", () => decide(tracks, getConsent, tMs)); // sync read of the Solana-synced cache
       // the badge's A button, over light: relay a consent bit that disagrees with the chain (debounced, fire-and-forget)
@@ -166,12 +190,12 @@ export class Pipeline {
     this.logDecisions(tracks);
     const now = performance.now();
     this.stageMs.total = (this.stageMs.total ?? 0) * 0.8 + (now - tGrab) * 0.2;
-    drawOverlay(dctx, dispW, dispH, tracks, beacons, optical ? lastDebug : null, flags.BEACON_DEBUG, this.stageMs);
+    drawOverlay(dctx, dispW, dispH, tracks, beacons, optical ? lastDebug : null, flags.BEACON_DEBUG, this.stageMs, this.visionLabel(remote));
 
     const dt = now - this.lastT; this.lastT = now;
     this.fps = this.fps * 0.9 + (1000 / Math.max(1, dt)) * 0.1;
     if (this.tick++ % 6 === 0) {
-      this.onState({ fps: Math.round(this.fps), tracks: tracks.map((t) => ({ ...t })), beacons, debug: optical ? lastDebug : null, procWidth: procW, stageMs: { ...this.stageMs } });
+      this.onState({ fps: Math.round(this.fps), tracks: tracks.map((t) => ({ ...t })), beacons, debug: optical ? lastDebug : null, procWidth: procW, stageMs: { ...this.stageMs }, vision: this.visionLabel(remote) });
     }
   };
 
@@ -224,7 +248,7 @@ function fingerprint(img: ImageData): number {
 // Drawn AFTER the default-deny composite so it is visible on top of the blur.
 function drawOverlay(
   ctx: CanvasRenderingContext2D, W: number, H: number,
-  tracks: Track[], beacons: BeaconReading[], dbg: BeaconDebug | null, debug: boolean, stageMs: Record<string, number> = {},
+  tracks: Track[], beacons: BeaconReading[], dbg: BeaconDebug | null, debug: boolean, stageMs: Record<string, number> = {}, vision = "",
 ): void {
   ctx.save();
   ctx.lineWidth = 2;
@@ -260,8 +284,9 @@ function drawOverlay(
     const hud = `decode ${dbg.width}px · ${mode} · ${n} ${noun}${n === 1 ? "" : "s"}${n === 0 ? none : ""}${dbg.ms !== undefined ? ` · ${dbg.ms.toFixed(0)} ms` : ""}`;
     label(8, H - 8, hud, "#e6ebf5");
     // where the frame time goes (smoothed): the answer to "why is it slow?"
-    const cost = ["grab", "detect", "decode", "blur", "total"].filter((k) => stageMs[k] !== undefined).map((k) => `${k} ${stageMs[k].toFixed(0)}`).join(" · ");
+    const cost = ["grab", "detect", "decode", "blur", "total", "sidecar"].filter((k) => stageMs[k] !== undefined).map((k) => `${k} ${stageMs[k].toFixed(0)}`).join(" · ");
     if (cost) label(8, H - 26, `ms/frame: ${cost}`, "#e6ebf5");
+    if (vision) label(8, H - 44, `vision: ${vision}`, vision.startsWith("sidecar yolo") ? "#37d67a" : "#f5b942");
   }
   if (dbg && dbg.width) {
     const sx = W / dbg.width, sy = H / dbg.height;
