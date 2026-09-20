@@ -95,7 +95,7 @@ export function App() {
           <span>consent-respecting capture</span>
         </div>
         <div className="badges">
-          <span className={"chip live" + (running ? " on" : "")}>{running ? `Live · ${source}` : "Idle"}</span>
+          <span className={"chip live" + (running ? " on" : "")}>{running ? <>Live<i>{source}</i></> : "Idle"}</span>
           {chain && <span className="chip chain-chip" title={chain.status.programId}>Solana {chain.status.cluster}</span>}
         </div>
       </header>
@@ -138,7 +138,7 @@ export function App() {
             <span className="maskgroup">
             <button className={"seg " + (mask === "icon" ? "optical" : "")} onClick={iconUrl ? toggleMask : () => fileRef.current?.click()}
               title={iconUrl ? "blur = pixelate covered faces · icon = paint your image over them (same box, same coverage)" : "drop an image on the feed, or click to pick one"}>
-              Mask · {iconUrl ? mask : "drop an icon"}
+              <span className="k">Mask</span><span className="v">{iconUrl ? mask : "drop an icon"}</span>
             </button>
             {iconUrl && <img className="maskpreview" src={iconUrl} alt="" title="click to remove" onClick={clearIcon} />}
             </span>
@@ -150,19 +150,19 @@ export function App() {
             <button onClick={() => startScreen().then((s) => begin(s, "screen")).catch(fail)}>Share screen</button>
             <button className={"seg " + decoder} onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")}
               title="stub = fixed demo beacons · optical = decode the real badge">
-              Beacon · {decoder}
+              <span className="k">Beacon</span><span className="v">{decoder}</span>
             </button>
             <button className={"seg " + (privacyBlur ? "optical" : "")} onClick={toggleBlur}
               title="on = pixelate everyone without an opt-in badge · off = show the raw feed (setup only)">
-              Blur · {privacyBlur ? "on" : "off"}
+              <span className="k">Blur</span><span className="v">{privacyBlur ? "on" : "off"}</span>
             </button>
             <button className={"seg " + (composite === "frame" ? "optical" : "")} onClick={toggleComposite}
               title="frame = default-deny, whole frame blurred except opt-ins · faces = blur only the faces judged non-consenting (setup/debug)">
-              Cover · {composite}
+              <span className="k">Cover</span><span className="v">{composite}</span>
             </button>
             <button className={"seg " + (unknownPolicy === "blur" ? "optical" : "")} onClick={toggleUnknown}
               title="what a face with no usable consent record gets · blur = default-deny (fail-safe) · clear = only recognized opt-outs are blurred">
-              Unknown · {unknownPolicy}
+              <span className="k">Unknown</span><span className="v">{unknownPolicy}</span>
             </button>
               </div>
             </details>
