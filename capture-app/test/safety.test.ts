@@ -112,4 +112,22 @@ const face = (id: string, x: number, y: number): Track => ({
   assert.equal(t.blurred, true, "unknown ⇒ blur");
 }
 
+// ------------------------------------------------- opt-out-only policy
+// DEFAULT_CONSENT="clear": unknown clears, but a recognized opt-out — on-chain or
+// from the badge's own light — still blurs. The light stays restrict-only.
+{
+  const was = flags.DEFAULT_CONSENT;
+  flags.DEFAULT_CONSENT = "clear";
+  const t = face("t", 0.45, 0.30);
+  decide([t], () => "unknown", 1000);
+  assert.equal(t.blurred, false, "clear policy: no badge ⇒ clear");
+  associate([t], [{ beaconId: "AA", imagePosition: { x: 0.5, y: 0.5 }, confidence: 1, optIn: false }], 1000);
+  decide([t], () => "unknown", 1000);
+  assert.equal(t.blurred, true, "clear policy: unregistered badge whose light says OPT-OUT ⇒ blur");
+  associate([t], [{ beaconId: "AA", imagePosition: { x: 0.5, y: 0.5 }, confidence: 1, optIn: true }], 1000);
+  decide([t], () => "opt_out", 1000);
+  assert.equal(t.blurred, true, "clear policy: on-chain opt_out ⇒ blur even with a mint light");
+  flags.DEFAULT_CONSENT = was;
+}
+
 console.log("safety.test.ts: all default-deny guards hold");
