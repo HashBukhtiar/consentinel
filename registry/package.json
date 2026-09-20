@@ -12,7 +12,8 @@
     "toggle": "tsx client/scripts/toggle.mts",
     "badge-press": "tsx client/scripts/badge-press.mts",
     "watch": "tsx client/scripts/watch.mts",
-    "status": "tsx client/scripts/status.mts"
+    "status": "tsx client/scripts/status.mts",
+    "register-camera": "tsx scripts/register-camera.mts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.99.0",

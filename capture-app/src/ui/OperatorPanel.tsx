@@ -168,8 +168,11 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
               {nt?.notice && (nt.notice.explorer
                 ? <a href={nt.notice.explorer} target="_blank" rel="noreferrer" title={`record_notice: told ${time(nt.notice.notifiedAt * 1000)} via ${nt.notice.channels.join(", ")}`}>told ↗</a>
                 : <span className="tagx ok" title="told (confirmed from on-chain state)">told</span>)}
+              {nt?.email?.mode === "sent" && <span className="tagx ok" title={`emailed ${nt.email.to} in ${nt.email.ms}ms${nt.email.id ? ` — ${nt.email.id}` : ""}`}>emailed</span>}
+              {nt?.email?.mode === "dry-run" && <span className="tagx" title={`composed for ${nt.email.to} but NOT sent (${nt.email.error}) — CHANNEL_EMAIL is not claimed on-chain`}>email dry-run</span>}
+              {nt?.email?.mode === "failed" && <span className="tagx" style={{ color: "var(--blur)" }} title={`email to ${nt.email.to} failed: ${nt.email.error} — CHANNEL_EMAIL is not claimed on-chain`}>email failed</span>}
               {nt?.stage === "coalesced" && <span className="tagx" title={`covered by the notice filed for the capture at ${nt.coveredBy ? time(nt.coveredBy.at) : "?"} (one receipt per badge per minute)`}>covered</span>}
-              {nt?.stage === "unreachable" && <span className="tagx" title="no contact on file and no live channel — the capture is filed, there was nobody to tell">no contact</span>}
+              {nt?.stage === "unreachable" && <span className="tagx" title="no channel actually reached them — the capture is filed, nobody was told, and nothing is claimed on-chain">nobody told</span>}
               {nt?.stage === "error" && <span className="tagx" style={{ color: "var(--blur)" }} title={nt.error}>notice failed</span>}
             </div>
             <span>{time(e.at)}</span>

@@ -13,20 +13,29 @@
 // person here, off-chain, and only the person's masked address ever reaches
 // the operator screen.
 //
-// Email transport: DRY-RUN for the demo. The message is composed and logged
-// (NOTICE_LOG), nothing leaves the laptop; /health and the operator panel say
-// so. The on-chain notice is real either way — that is the point of it.
+// Email transport: real. EMAIL_MODE=send posts the message through Resend and
+// the CHANNEL_EMAIL bit is set ONLY on a confirmed 2xx, so the on-chain
+// `channels` mask never claims a delivery that did not happen. EMAIL_MODE=
+// dry-run (the default) composes and logs the message, sends nothing, and
+// therefore sets no bit — a capture whose only channel was a dry-run email is
+// `unreachable`, which is the honest outcome: filmed, recorded, nobody told.
+//
+// SMS is plumbed the whole way through (CHANNEL_SMS, `contact.phone`, the
+// notice state) but has no transport, so it never sets its bit either.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import { CHANNEL_BADGE_RADIO, CHANNEL_EMAIL, CHANNEL_VOICE, channelNames, explorerUrl, normalizeBadgeId } from "../../registry/client/src/core";
+import { CHANNEL_BADGE_RADIO, CHANNEL_EMAIL, CHANNEL_SMS, CHANNEL_VOICE, channelNames, explorerUrl, normalizeBadgeId } from "../../registry/client/src/core";
 import type { AuditEntry } from "./audit";
 import type { Chain } from "./chain";
 import { config } from "./config";
+import { emailDisabledReason, emailReady, sendEmail } from "./email";
 
 export interface Contact {
   badgeId: string;
   name: string;
   email?: string;
+  /** E.164, e.g. +14155550123. Off-chain only, like every other contact field. */
+  phone?: string;
 }
 
 export type NoticeStage = "queued" | "recorded" | "notified" | "unreachable" | "coalesced" | "error";
@@ -41,10 +50,11 @@ export interface NoticeState {
   eventHash: string;
   cameraId: string;
   filmedAt: number; // ms, the camera's clock (FilmEvent.at)
-  person: { name: string; email?: string } | null; // email MASKED
+  person: { name: string; email?: string; phone?: string } | null; // email + phone MASKED
   capture?: { signature: string; explorer: string; address: string; addressExplorer: string; recordedAt: number }; // unix s (chain clock)
   notice?: { signature: string; explorer: string; notifiedAt: number; channels: string[] }; // unix s (chain clock)
-  email?: { to: string; subject: string; mode: "dry-run" | "sent"; at: number }; // `to` masked
+  /** `to` masked. `sent` is the only mode that sets CHANNEL_EMAIL on-chain. */
+  email?: { to: string; subject: string; mode: "dry-run" | "sent" | "failed"; at: number; id?: string; error?: string; ms?: number };
   /** `coalesced`: this film-event is covered by the notice filed for that earlier event (same badge, within NOTICE_MIN_INTERVAL_MS) */
   coveredBy?: { eventId: string; at: number };
   error?: string;
@@ -62,6 +72,13 @@ export function maskEmail(e: string): string {
   const at = e.indexOf("@");
   if (at <= 0) return "•••";
   return `${e[0]}•••${e.slice(at)}`;
+}
+
+/** `+14155550123` → `+1•••0123`: same rule as email — recognisable, not harvestable. */
+export function maskPhone(p: string): string {
+  const digits = p.replace(/[^\d]/g, "");
+  if (digits.length < 4) return "•••";
+  return `${p.startsWith("+") ? "+" : ""}${digits.slice(0, 1)}•••${digits.slice(-4)}`;
 }
 
 export function composeEmail(c: Contact, entry: AuditEntry): { to: string; subject: string; text: string } {
@@ -83,7 +100,7 @@ export class Notifier {
   private contacts = new Map<string, Contact>();
   private contactsMtime = -1;
   private recent: NoticeState[] = [];
-  private counts = { recorded: 0, notified: 0, unreachable: 0, coalesced: 0, errors: 0 };
+  private counts = { recorded: 0, notified: 0, unreachable: 0, coalesced: 0, errors: 0, emailsSent: 0, emailsFailed: 0 };
   private lastByBadge = new Map<string, { eventId: string; at: number }>(); // last notice filed per badge (coalescing window)
 
   constructor(
@@ -112,7 +129,12 @@ export class Notifier {
         if (!b?.badgeId || !b?.contact?.name) continue;
         let id: string;
         try { id = normalizeBadgeId(String(b.badgeId)); } catch { continue; }
-        out.set(id, { badgeId: id, name: String(b.contact.name), email: b.contact.email ? String(b.contact.email) : undefined });
+        out.set(id, {
+          badgeId: id,
+          name: String(b.contact.name),
+          email: b.contact.email ? String(b.contact.email) : undefined,
+          phone: b.contact.phone ? String(b.contact.phone) : undefined,
+        });
       }
       this.contacts = out;
       this.contactsMtime = m;
@@ -131,9 +153,21 @@ export class Notifier {
       enabled: this.enabled,
       onChain: config.NOTIFY_ON_CHAIN,
       emailMode: config.EMAIL_MODE,
+      /** true ⇒ a successful send will set CHANNEL_EMAIL on-chain */
+      emailReady: emailReady(),
+      emailBlockedBy: emailDisabledReason(),
+      emailFrom: config.EMAIL_FROM,
+      /** demo delivery redirect; masked. null = mail goes to each contact's own address */
+      emailRedirectTo: config.EMAIL_REDIRECT_TO ? maskEmail(config.EMAIL_REDIRECT_TO) : null,
+      smsMode: config.SMS_MODE,
       minIntervalMs: config.NOTICE_MIN_INTERVAL_MS,
       contactsFile: config.CONTACTS_FILE,
-      contacts: [...this.loadContacts().values()].map((c) => ({ badgeId: c.badgeId, name: c.name, email: c.email ? maskEmail(c.email) : null })),
+      contacts: [...this.loadContacts().values()].map((c) => ({
+        badgeId: c.badgeId,
+        name: c.name,
+        email: c.email ? maskEmail(c.email) : null,
+        phone: c.phone ? maskPhone(c.phone) : null,
+      })),
       counts: { ...this.counts },
       recent: this.recent.slice(-8),
     };
@@ -167,7 +201,12 @@ export class Notifier {
 
   private personOf(beaconId: string): NoticeState["person"] {
     const c = this.contact(beaconId);
-    return c ? { name: c.name, email: c.email ? maskEmail(c.email) : undefined } : null;
+    if (!c) return null;
+    return {
+      name: c.name,
+      email: c.email ? maskEmail(c.email) : undefined,
+      phone: c.phone ? maskPhone(c.phone) : undefined,
+    };
   }
 
   /** Why an on-chain write failed, in words the operator can act on. */
@@ -215,21 +254,42 @@ export class Notifier {
       emit(); this.remember(st);
       return;
     }
-    // 2. tell them — every channel that actually reached them
+    // 2. tell them — only channels that ACTUALLY reached them set a bit, because
+    //    `channels` is written on-chain as a claim of delivery.
     let channels = 0;
     if (c?.email) {
       const mail = composeEmail(c, entry);
-      // DRY-RUN: composed and logged, never sent (no mail API in the demo)
-      st.email = { to: maskEmail(mail.to), subject: mail.subject, mode: config.EMAIL_MODE, at: Date.now() };
-      this.logLine({ kind: "email", mode: config.EMAIL_MODE, eventId: entry.eventId, beaconId: entry.beaconId, to: mail.to, subject: mail.subject, text: mail.text, at: st.email.at });
-      channels |= CHANNEL_EMAIL;
+      const sent = await sendEmail(mail);
+      const mode = sent.ok ? "sent" : sent.mode === "dry-run" ? "dry-run" : "failed";
+      st.email = { to: maskEmail(mail.to), subject: mail.subject, mode, at: Date.now(), id: sent.id, error: sent.error, ms: sent.ms };
+      this.logLine({ kind: "email", mode, eventId: entry.eventId, beaconId: entry.beaconId, to: mail.to, redirectedTo: sent.redirectedTo, subject: mail.subject, text: mail.text, at: st.email.at, providerId: sent.id, error: sent.error, ms: sent.ms });
+      if (sent.ok) {
+        channels |= CHANNEL_EMAIL;
+        this.counts.emailsSent++;
+        // `to` stays the contact's own address everywhere the operator can see it;
+        // the redirect is disclosed here and in /health, not on the panel.
+        const via = sent.redirectedTo ? ` → delivered to ${maskEmail(sent.redirectedTo)} (EMAIL_REDIRECT_TO)` : "";
+        this.log(`notice: emailed ${maskEmail(mail.to)} in ${sent.ms}ms${sent.id ? ` (${sent.id})` : ""}${via}`);
+      } else if (mode === "failed") {
+        this.counts.emailsFailed++;
+        this.log(`notice: email to ${maskEmail(mail.to)} FAILED — ${sent.error}; CHANNEL_EMAIL not claimed on-chain`);
+      } else {
+        this.log(`notice: email to ${maskEmail(mail.to)} composed but not sent (${sent.error}); CHANNEL_EMAIL not claimed on-chain`);
+      }
     }
+    // SMS: plumbed but transportless — `contact.phone` is read and masked into the
+    // notice state, and CHANNEL_SMS exists, but nothing sets it until a transport
+    // lands. Deliberately not claimed on-chain in the meantime.
+    void CHANNEL_SMS;
     if (inputs.radioDelivered) channels |= CHANNEL_BADGE_RADIO;
     if (inputs.voice) channels |= CHANNEL_VOICE;
     if (!channels) {
       st.stage = "unreachable";
       this.counts.unreachable++;
-      this.log(`notice: ${entry.beaconId} has no contact on file and no live channel — capture recorded, nobody told`);
+      const why = c?.email
+        ? `email did not send (${st.email?.error ?? st.email?.mode}) and no other channel reached them`
+        : "no contact on file and no live channel";
+      this.log(`notice: ${entry.beaconId} — ${why}; capture recorded, nobody told`);
       emit(); this.remember(st);
       return;
     }

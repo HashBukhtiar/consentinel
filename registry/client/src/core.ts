@@ -27,6 +27,13 @@ export const MAX_CAPTURE_SKEW_SECS = 5 * 60;
 export const CHANNEL_EMAIL = 1;
 export const CHANNEL_BADGE_RADIO = 2;
 export const CHANNEL_VOICE = 4;
+/**
+ * `record_notice` validates only `channels != 0` — it never checks which bits
+ * are set — so a new channel needs no program upgrade. This one is defined and
+ * carried through the notice pipeline but has no transport yet, so nothing
+ * sets it (see config.SMS_MODE).
+ */
+export const CHANNEL_SMS = 8;
 
 /** Human names for a `channels` bit set, e.g. 3 → ["email", "badge radio"]. */
 export function channelNames(mask: number): string[] {
@@ -34,6 +41,7 @@ export function channelNames(mask: number): string[] {
   if (mask & CHANNEL_EMAIL) out.push("email");
   if (mask & CHANNEL_BADGE_RADIO) out.push("badge radio");
   if (mask & CHANNEL_VOICE) out.push("voice");
+  if (mask & CHANNEL_SMS) out.push("sms");
   return out;
 }
 
