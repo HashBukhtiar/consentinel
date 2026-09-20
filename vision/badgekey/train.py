@@ -19,7 +19,7 @@ args = ap.parse_args()
 model = YOLO(args.model)
 res = model.train(
     data=args.data, epochs=args.epochs, imgsz=args.imgsz, batch=args.batch, device="mps", workers=4,
-    project="vision/badgekey/runs", name="badgekey", exist_ok=True,
+    project=str(Path(__file__).resolve().parent / "runs"), name="badgekey", exist_ok=True,  # absolute: a relative project lands under ./runs/detect/
     fliplr=0.0,  # a mirrored glyph is a different (or no) digit
     degrees=8.0, translate=0.1, scale=0.5, perspective=0.0005,
     hsv_h=0.02, hsv_s=0.5, hsv_v=0.4, mosaic=1.0, close_mosaic=5, patience=12, plots=False, verbose=True,
