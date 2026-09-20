@@ -288,6 +288,13 @@ chain from raw fields and compares it to the on-chain head (reports
 if `SERVICE_TOKEN` is set) feeds the "who filmed me?" layer, and
 `GET /audit/notices?badge=4E` returns the camera's on-chain notices for that
 badge (filmed_at / notified_at / channels, one `getProgramAccounts`).
+One camera key per running service: a second laptop attesting with a copy of
+the same `keys/camera-cam-1.json` forks the two local logs from the chain
+(`/audit/verify` reports it on both). Give that machine its own camera
+(delete its `keys/camera-cam-1.json`, re-run `npm run seed` there), then
+`npm run rebuild-audit` in `service/` re-derives this log's batch list from
+the chain's own `CaptureAttested` events (keeps every local film-event; the
+old file is kept as `.bak`).
 
 ### Flags
 

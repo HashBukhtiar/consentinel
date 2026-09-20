@@ -84,7 +84,11 @@ export class Chain {
       const recovered = this.audit.recover({ head: this.cameraView.head, count: this.cameraView.count });
       if (recovered) this.log(`recovered ${recovered} batch(es) that landed on-chain before the last shutdown`);
       const v = this.audit.verify({ head: this.cameraView.head, count: this.cameraView.count });
-      if (!v.ok) this.lastError = `local audit log does not match on-chain head (local count ${v.local.count}, chain ${v.onChain.count}, mismatches ${v.local.mismatches.length})`;
+      if (!v.ok) {
+        this.lastError = `local audit log does not match on-chain head (local count ${v.local.count}, chain ${v.onChain.count}, mismatches ${v.local.mismatches.length})`;
+        // the usual cause: a second copy of the service attesting with this camera key from another laptop, each with its own log
+        this.log(`!! ${this.lastError}. If another machine runs the service with this camera key, give it its own (delete its keys/camera-<label>.json and re-run npm run seed there); then \`npm run rebuild-audit\` here re-derives this log's batches from the chain.`);
+      }
       const backlog = this.audit.unanchored();
       if (backlog.length) {
         this.log(`re-queueing ${backlog.length} unanchored film-event(s) from a previous run`);
