@@ -1,5 +1,6 @@
 // End-to-end smoke test of the wired system, no camera or badge needed:
 //   FilmEvent → audit log → CNSF radio frame → on-chain attestation
+//            → notice: record_capture (filmed) + email dry-run + record_notice (told), both on-chain
 //   CNSR radio request → badge-signed relay → on-chain flip → CNSC mirror
 // Run with the service up (`npm run dev` here) and the registry seeded.
 //   npm run smoke            # against http://localhost:8787
@@ -61,7 +62,23 @@ check(again.body.result === "noop", "a repeated request is a no-op (no duplicate
 const back = await post("/bridge/uplink", `CNSR${BADGE}${c0.body.consent ? 1 : 0}`);
 check(back.body.result === "relayed", `restored ${BADGE} to ${c0.body.consent ? "opt_in" : "opt_out"}`, back.body.explorer ?? back.body);
 
-// 6. the film-event gets anchored in the next interval
+// 6. the notice: filmed → told, two camera-signed transactions, readable straight from the chain
+if (fe.body.notice === "disabled") check(false, "notices are disabled on the service (NOTIFY_ON_CHAIN / camera key)");
+else {
+  console.log(`  … waiting up to 40s for the on-chain notice (record_capture → record_notice)`);
+  let mine: any = null;
+  for (let t = 0; t < 40_000; t += 2000) {
+    await sleep(2000);
+    const r = await get(`/audit/notices?badge=${BADGE}`);
+    mine = (r.body.onChain ?? []).find((n: any) => n.eventHash === fe.body.hash) ?? null;
+    if (mine?.notifiedAt) break;
+  }
+  check(!!mine, `record_capture landed: notice account for this film-event (filmed_at ${mine ? new Date(mine.filmedAt * 1000).toLocaleTimeString() : "?"})`, mine ? { address: mine.address, recordedAt: mine.recordedAt } : undefined);
+  check(!!mine?.notifiedAt, `record_notice landed: told at ${mine?.notifiedAt ? new Date(mine.notifiedAt * 1000).toLocaleTimeString() : "?"} (channels ${mine?.channels})`, mine ? { notifiedAt: mine.notifiedAt, channels: mine.channels } : undefined);
+  check(mine ? mine.filmedAt === Math.floor(ev.at / 1000) : false, "filmed_at on-chain equals the FilmEvent's timestamp");
+}
+
+// 7. the film-event gets anchored in the next interval
 console.log(`  … waiting up to ${Math.round((interval + 8000) / 1000)}s for the next on-chain commitment`);
 let verified: any = null;
 for (let t = 0; t < interval + 8000; t += 2000) {
@@ -71,5 +88,5 @@ for (let t = 0; t < interval + 8000; t += 2000) {
 }
 check(!!verified?.ok && verified.local?.unanchored === 0, "audit log verifies against the on-chain head", verified ? { count: verified.onChain?.count, batches: verified.batches, explorer: verified.explorer } : undefined);
 
-console.log(failures ? `\n${failures} check(s) failed` : "\nall wired: capture → service → radio → chain → mirror");
+console.log(failures ? `\n${failures} check(s) failed` : "\nall wired: capture → service → radio → chain (attested + filmed + told) → mirror");
 process.exit(failures ? 1 : 0);

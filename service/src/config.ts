@@ -61,6 +61,17 @@ export const config = {
   AUDIO_DIR: join(SERVICE_DIR, "audio"),
   /** Debounce identical spoken alerts per badge (the capture app already debounces FilmEvents). */
   ALERT_MIN_INTERVAL_MS: Number(env("ALERT_MIN_INTERVAL_MS", "8000")),
+  /**
+   * Notices: for every film-event of an opted-out badge, `record_capture`
+   * (filmed) then `record_notice` (told) on-chain, signed by the camera key.
+   */
+  NOTIFY_ON_CHAIN: bool("NOTIFY_ON_CHAIN", true),
+  /** Organizer's directory badge → person (the `contact` field of each seed badge). Never on-chain. */
+  CONTACTS_FILE: abs(env("CONTACTS_FILE", "../data/demo/seed-consents.json")),
+  /** Email transport. The demo ships only `dry-run`: composed + logged, nothing sent. */
+  EMAIL_MODE: "dry-run" as const,
+  /** Where composed emails and notice outcomes are appended (JSONL; holds addresses — gitignored dir). */
+  NOTICE_LOG: abs(env("NOTICE_LOG", "../data/audit/notices.jsonl")),
   MAX_PENDING_EVENTS: 500,
 };
 

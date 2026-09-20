@@ -23,12 +23,16 @@ import { createHash } from "node:crypto";
 import { assert } from "chai";
 import type { ConsentRegistry } from "../target/types/consent_registry";
 import {
+  CHANNEL_BADGE_RADIO,
+  CHANNEL_EMAIL,
   ZERO_HEAD,
   badgeIdToU16,
   batchCommitment,
   cameraPda,
+  capturePda,
   consentMessage,
   consentPda,
+  filmEventHash,
   overridePda,
   registryPda,
   rollHead,
@@ -356,6 +360,105 @@ describe("consent_registry", () => {
     await expectAnchorError(
       program.methods.attestCapture(Array.from(new Uint8Array(32).fill(7)) as any).accountsPartial({ camera: cpda, authority: owner2.publicKey }).signers([owner2]).rpc(),
       "ConstraintSeeds",
+    );
+  });
+
+  // --- capture notices (filmed / notified) -----------------------------------
+
+  it("record_capture: the camera files a notice for an opted-out badge; fields + event; only the camera authority", async () => {
+    const [cpda] = cameraPda(camera.publicKey, program.programId);
+    const ev = { eventId: "e-capture-1", beaconId: "4E", at: Date.now() - 1500, cameraId: "cam-1" };
+    const hash = filmEventHash(ev);
+    const [npda] = capturePda(camera.publicKey, hash, program.programId);
+    const filmedAt = Math.floor(ev.at / 1000);
+
+    // someone who is not the camera authority (the badge owner, the issuer) cannot file one
+    const [foreign] = capturePda(owner2.publicKey, hash, program.programId);
+    const [foreignCam] = cameraPda(owner2.publicKey, program.programId);
+    try {
+      await program.methods.recordCapture(0x4e, Array.from(hash), new BN(filmedAt)).accountsPartial({ camera: foreignCam, notice: foreign, authority: owner2.publicKey }).signers([owner2]).rpc();
+      assert.fail("a key without a registered camera must not file notices");
+    } catch (e: any) {
+      assert.match(String(e?.message ?? e), /AccountNotInitialized|not initialized|3012/i);
+    }
+
+    const sig = await program.methods
+      .recordCapture(0x4e, Array.from(hash), new BN(filmedAt))
+      .accountsPartial({ camera: cpda, notice: npda, authority: camera.publicKey })
+      .signers([camera])
+      .rpc({ commitment: "confirmed" });
+    const n = await program.account.captureNotice.fetch(npda);
+    assert.equal(n.badgeId, 0x4e);
+    assert.ok(n.camera.equals(camera.publicKey));
+    assert.deepEqual(Array.from(n.eventHash), Array.from(hash));
+    assert.equal(n.filmedAt.toNumber(), filmedAt);
+    assert.ok(n.recordedAt.toNumber() >= filmedAt - 5, "recorded on or after the capture");
+    assert.equal(n.notifiedAt.toNumber(), 0, "pending until record_notice");
+    assert.equal(n.channels, 0);
+
+    const tx = await conn.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+    const parser = new anchor.EventParser(program.programId, program.coder);
+    const ev2 = [...parser.parseLogs(tx!.meta!.logMessages!)].find((e) => e.name.toLowerCase() === "capturerecorded");
+    assert.ok(ev2, "CaptureRecorded event present");
+    const d = ev2!.data as any;
+    assert.equal(d.badge_id ?? d.badgeId, 0x4e);
+    assert.equal((d.filmed_at ?? d.filmedAt).toNumber(), filmedAt);
+  });
+
+  it("record_capture: the same film-event cannot be filed twice; a future filmed_at is rejected (BadTimestamp)", async () => {
+    const [cpda] = cameraPda(camera.publicKey, program.programId);
+    const hash = filmEventHash({ eventId: "e-capture-1", beaconId: "4E", at: 1, cameraId: "cam-1" }); // different bytes, fresh PDA
+    const [npda] = capturePda(camera.publicKey, hash, program.programId);
+    await expectAnchorError(
+      program.methods.recordCapture(0x4e, Array.from(hash), new BN(now() + 3600)).accountsPartial({ camera: cpda, notice: npda, authority: camera.publicKey }).signers([camera]).rpc(),
+      "BadTimestamp",
+    );
+    await expectAnchorError(
+      program.methods.recordCapture(0x4e, Array.from(hash), new BN(0)).accountsPartial({ camera: cpda, notice: npda, authority: camera.publicKey }).signers([camera]).rpc(),
+      "BadTimestamp",
+    );
+    await program.methods.recordCapture(0x4e, Array.from(hash), new BN(now() - 1)).accountsPartial({ camera: cpda, notice: npda, authority: camera.publicKey }).signers([camera]).rpc({ commitment: "confirmed" });
+    try {
+      await program.methods.recordCapture(0x4e, Array.from(hash), new BN(now() - 1)).accountsPartial({ camera: cpda, notice: npda, authority: camera.publicKey }).signers([camera]).rpc();
+      assert.fail("second record_capture for the same event hash should fail");
+    } catch (e: any) {
+      assert.match(String(e), /already in use|custom program error|0x0/i);
+    }
+  });
+
+  it("record_notice: stamps the chain clock + channels once; NoChannel / AlreadyNotified / non-authority rejected", async () => {
+    const ev = { eventId: "e-capture-1", beaconId: "4E", at: 1, cameraId: "cam-1" };
+    const hash = filmEventHash(ev);
+    const [npda] = capturePda(camera.publicKey, hash, program.programId);
+    await expectAnchorError(
+      program.methods.recordNotice(0).accountsPartial({ notice: npda, authority: camera.publicKey }).signers([camera]).rpc(),
+      "NoChannel",
+    );
+    // the badge owner cannot mark their own notice delivered (seeds bind the notice to the camera authority)
+    await expectAnchorError(
+      program.methods.recordNotice(CHANNEL_EMAIL).accountsPartial({ notice: npda, authority: owner2.publicKey }).signers([owner2]).rpc(),
+      "ConstraintSeeds",
+    );
+    const before = await program.account.captureNotice.fetch(npda);
+    const sig = await program.methods
+      .recordNotice(CHANNEL_EMAIL | CHANNEL_BADGE_RADIO)
+      .accountsPartial({ notice: npda, authority: camera.publicKey })
+      .signers([camera])
+      .rpc({ commitment: "confirmed" });
+    const after = await program.account.captureNotice.fetch(npda);
+    assert.ok(after.notifiedAt.toNumber() >= before.recordedAt.toNumber(), "notified on or after it was recorded");
+    assert.equal(after.channels, CHANNEL_EMAIL | CHANNEL_BADGE_RADIO);
+    assert.equal(after.filmedAt.toNumber(), before.filmedAt.toNumber(), "the capture time is untouched");
+
+    const tx = await conn.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+    const parser = new anchor.EventParser(program.programId, program.coder);
+    const ev2 = [...parser.parseLogs(tx!.meta!.logMessages!)].find((e) => e.name.toLowerCase() === "noticerecorded");
+    assert.ok(ev2, "NoticeRecorded event present");
+    assert.equal((ev2!.data as any).channels, CHANNEL_EMAIL | CHANNEL_BADGE_RADIO);
+
+    await expectAnchorError(
+      program.methods.recordNotice(CHANNEL_EMAIL).accountsPartial({ notice: npda, authority: camera.publicKey }).signers([camera]).rpc(),
+      "AlreadyNotified",
     );
   });
 

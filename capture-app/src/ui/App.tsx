@@ -4,6 +4,7 @@ import { listCameras, startCamera, startScreen } from "../sources/videoSource";
 import { startSynthetic, SyntheticHandle } from "../sources/synthetic";
 import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
+import { NoticeToasts } from "./NoticeToast";
 import { chain, startConsent } from "../consent/store";
 import type { BeaconDebug } from "../decode/beacon";
 import { captureDiagnostic, sendDiagnostic, captureSequence, sendSequence } from "../diag/snapshot";
@@ -165,7 +166,10 @@ export function App() {
       {diag && <div className="muted" style={{ marginBottom: 8 }}>diag: {diag}</div>}
 
       <div className="stage">
-        <canvas ref={canvasRef} className="feed" />
+        <div className="feedwrap">
+          <canvas ref={canvasRef} className="feed" />
+          <NoticeToasts />
+        </div>
         <OperatorPanel fps={fps} source={source} tracks={tracks} events={events} beacons={beacons} debug={debug} decoder={decoder} />
       </div>
 

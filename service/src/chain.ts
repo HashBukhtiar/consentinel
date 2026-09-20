@@ -12,7 +12,7 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { existsSync, readFileSync } from "node:fs";
 import nacl from "tweetnacl";
 import { ConsentRegistryClient, anchorErrorCode, keypairSigner, type CameraView } from "../../registry/client/src/registry";
-import { MAX_DELEGATED_TTL_SECS, badgeIdToU16, consentMessage, explorerUrl, fromHex, normalizeBadgeId, toHex } from "../../registry/client/src/core";
+import { MAX_DELEGATED_TTL_SECS, badgeIdToU16, capturePda, consentMessage, explorerUrl, fromHex, normalizeBadgeId, toHex } from "../../registry/client/src/core";
 import { config } from "./config";
 import type { AuditEntry, AuditLog, Batch } from "./audit";
 
@@ -159,6 +159,53 @@ export class Chain {
     if (cam) this.cameraView = cam;
     if (cam && cam.head !== expectedHead) this.lastError = `RPC re-read lags behind (chain ${cam.count}, local ${batch.seq}); will reconcile`;
     this.onBatch(batch, entries);
+  }
+
+  // ---- capture notices (filmed / notified) ------------------------------------
+
+  /**
+   * `record_capture` for one audit entry: the notice PDA is keyed by the
+   * entry's hash, `filmed_at` is the camera's clock (FilmEvent.at) in seconds.
+   * If the send throws after the transaction landed (blockhash expiry, RPC
+   * timeout) the account is there — read it back instead of failing.
+   */
+  async recordCapture(entry: AuditEntry): Promise<{ signature: string; explorer: string; address: string; recordedAt: number }> {
+    if (!this.camera) throw new Error(`no camera keypair at ${config.CAMERA_KEYPAIR}`);
+    const hash = fromHex(entry.hash);
+    const [pda] = capturePda(this.camera.publicKey, hash, this.reg.programId);
+    const filmedAt = Math.floor(entry.at / 1000);
+    let signature: string;
+    try {
+      signature = await this.reg.recordCapture(keypairSigner(this.camera), entry.beaconId, hash, filmedAt);
+    } catch (e) {
+      const existing = await this.reg.fetchCapture(this.camera.publicKey, hash).catch(() => null);
+      if (!existing) throw e;
+      signature = "(landed; confirmed by on-chain state)";
+    }
+    const view = await this.reg.fetchCapture(this.camera.publicKey, hash).catch(() => null);
+    return { signature, explorer: signature.startsWith("(") ? "" : explorerUrl("tx", signature, config.SOLANA_CLUSTER), address: pda.toBase58(), recordedAt: view?.recordedAt ?? Math.floor(Date.now() / 1000) };
+  }
+
+  /** `record_notice`: the person was told over `channels` (CHANNEL_* bits); the chain clock stamps it. */
+  async recordNotice(entry: AuditEntry, channels: number): Promise<{ signature: string; explorer: string; notifiedAt: number }> {
+    if (!this.camera) throw new Error(`no camera keypair at ${config.CAMERA_KEYPAIR}`);
+    const hash = fromHex(entry.hash);
+    let signature: string;
+    try {
+      signature = await this.reg.recordNotice(keypairSigner(this.camera), hash, channels);
+    } catch (e) {
+      const existing = await this.reg.fetchCapture(this.camera.publicKey, hash).catch(() => null);
+      if (!existing?.notifiedAt) throw e;
+      signature = "(landed; confirmed by on-chain state)";
+    }
+    const view = await this.reg.fetchCapture(this.camera.publicKey, hash).catch(() => null);
+    return { signature, explorer: signature.startsWith("(") ? "" : explorerUrl("tx", signature, config.SOLANA_CLUSTER), notifiedAt: view?.notifiedAt ?? Math.floor(Date.now() / 1000) };
+  }
+
+  /** Every notice this camera has filed, newest first (one getProgramAccounts). */
+  async fetchNotices(badgeId?: string) {
+    if (!this.camera) return [];
+    return this.reg.fetchCaptures({ camera: this.camera.publicKey, badgeId });
   }
 
   async refreshCamera(): Promise<CameraView | null> {

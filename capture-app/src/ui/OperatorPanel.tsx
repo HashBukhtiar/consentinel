@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { consentStore } from "../stubs/consentStore";
 import { chain, getConsent } from "../consent/store";
 import { consentRequester } from "../events/consentRequest";
-import { operatorLink, type OperatorMessage } from "../events/operatorLink";
+import { operatorLink, type NoticeMsg, type OperatorMessage } from "../events/operatorLink";
 import { ChainPanel } from "./ChainPanel";
 import type { BeaconDebug } from "../decode/beacon";
 import { flags } from "../config/flags";
@@ -23,13 +23,23 @@ export function OperatorPanel({ fps, source, tracks, events, beacons, debug, dec
   const [svcUp, setSvcUp] = useState(false);
   const [radio, setRadio] = useState<RadioRow[]>([]);
   const [bridges, setBridges] = useState<number | null>(null);
+  // the notice path per film-event (filmed → told, both on-chain) and the organizer's directory (badge → name)
+  const [notices, setNotices] = useState<Map<string, NoticeMsg>>(new Map());
+  const [names, setNames] = useState<Map<string, string>>(new Map());
+  const [emailMode, setEmailMode] = useState("");
   useEffect(() => {
     operatorLink.start();
     const t = setInterval(() => setSvcUp(operatorLink.connected), 1000);
     const off = operatorLink.subscribe((m: OperatorMessage) => {
-      if (m.type === "health") { const r = (m as any).radio; if (r) { setBridges(r.bridges ?? 0); if (Array.isArray(r.recent)) setRadio(r.recent.slice(-6).reverse().map((x: any) => ({ type: "radio", ...x }))); } return; }
+      if (m.type === "health") {
+        const r = (m as any).radio; if (r) { setBridges(r.bridges ?? 0); if (Array.isArray(r.recent)) setRadio(r.recent.slice(-6).reverse().map((x: any) => ({ type: "radio", ...x }))); }
+        const n = (m as any).notify;
+        if (n) { setEmailMode(n.enabled ? `email ${n.emailMode}` : "notices off"); if (Array.isArray(n.contacts)) setNames(new Map(n.contacts.map((c: any) => [c.badgeId, c.name]))); }
+        return;
+      }
       if (m.type === "bridge") { setBridges(m.connected); return; }
       if (m.type === "radio") { setRadio((prev) => [m, ...prev].slice(0, 6)); return; }
+      if (m.type === "notice") { setNotices((prev) => new Map(prev).set(m.eventId, m)); return; }
       setSvc((prev) => {
         const next = new Map(prev);
         if (m.type === "alert") next.set(m.eventId, { ...next.get(m.eventId), alert: m.text, provider: m.provider });
@@ -130,7 +140,7 @@ export function OperatorPanel({ fps, source, tracks, events, beacons, debug, dec
       </table>
 
       {chain ? (
-        <ChainPanel cache={chain} />
+        <ChainPanel cache={chain} names={names} />
       ) : (
         <>
         <h3>Consent <span className="muted">stub (no network)</span></h3>
@@ -151,16 +161,26 @@ export function OperatorPanel({ fps, source, tracks, events, beacons, debug, dec
         </>
       )}
 
-      <h3>Film events <span className="muted">→ badge alarm + ElevenLabs + on-chain hash</span> <span className={"dot " + (svcUp ? "ok" : "warn")} title={svcUp ? "notify service connected" : "notify service not connected"} /></h3>
+      <h3>Film events <span className="muted">→ filmed + told on-chain · badge alarm · voice{emailMode ? ` · ${emailMode}` : ""}</span> <span className={"dot " + (svcUp ? "ok" : "warn")} title={svcUp ? "notify service connected" : "notify service not connected"} /></h3>
       {events.map((e) => {
         const s = svc.get(e.eventId);
+        const n = notices.get(e.eventId);
+        const name = n?.person?.name ?? names.get(e.beaconId);
         return (
           <div className="event" key={e.eventId}>
-            <div>📳 {e.beaconId}
+            <div>📳 {e.beaconId}{name && <span className="name"> · {name}</span>}
               {s?.alert && <span className="muted" title={s.alert}> · 🔊 {s.provider}</span>}
+              {n?.capture && (n.capture.explorer
+                ? <a href={n.capture.explorer} target="_blank" rel="noreferrer" title={`record_capture: filmed ${new Date(n.filmedAt).toLocaleTimeString()}, recorded ${new Date(n.capture.recordedAt * 1000).toLocaleTimeString()} (chain clock)`}> · ⛓ filmed ↗</a>
+                : <span className="muted"> · ⛓ filmed</span>)}
+              {n?.notice && (n.notice.explorer
+                ? <a href={n.notice.explorer} target="_blank" rel="noreferrer" title={`record_notice: told ${new Date(n.notice.notifiedAt * 1000).toLocaleTimeString()} via ${n.notice.channels.join(", ")}`}> · ✉ told ↗</a>
+                : <span className="muted"> · ✉ told</span>)}
+              {n && !n.notice && n.stage !== "error" && <span className="muted"> · {n.stage === "unreachable" ? "no contact on file" : n.stage === "recorded" ? "notifying…" : "filing…"}</span>}
+              {n?.stage === "error" && <span className="status err" title={n.error}> · notice failed</span>}
               {s?.attested && (s.attested.explorer
-                ? <a href={s.attested.explorer} target="_blank" rel="noreferrer" title={`anchored in commitment #${s.attested.count}`}> · ⛓ #{s.attested.count} ↗</a>
-                : <span className="muted" title="anchored (confirmed from on-chain state)"> · ⛓ #{s.attested.count}</span>)}
+                ? <a href={s.attested.explorer} target="_blank" rel="noreferrer" title={`anchored in commitment #${s.attested.count}`}> · #{s.attested.count} ↗</a>
+                : <span className="muted" title="anchored (confirmed from on-chain state)"> · #{s.attested.count}</span>)}
             </div>
             <span>{new Date(e.at).toLocaleTimeString()}</span>
           </div>

@@ -87,5 +87,23 @@ th { color: var(--muted); font-weight: 400; font-size: 11px; }
 .act .t { color: var(--muted); white-space: nowrap; }
 .act .x { flex: 1; }
 .act.push .x { color: var(--accent); } .act.error .x { color: #ffb3bf; } .act.tx .x { color: var(--clear); }
-.event > div { display: flex; gap: 4px; align-items: center; }
+.event > div { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.event .name { color: var(--fg); }
+
+/* ---- notice popups over the feed (filmed → notified, with the on-chain links) ---- */
+.feedwrap { position: relative; }
+.toasts { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { pointer-events: auto; background: rgba(19, 24, 36, .94); border: 1px solid var(--accent); border-radius: 10px;
+  padding: 10px 12px; font-size: 13px; box-shadow: 0 6px 24px rgba(0, 0, 0, .5); animation: toast-in .25s ease-out; }
+.toast.notified { border-color: var(--clear); }
+.toast.error { border-color: var(--blur); }
+.toast .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.toast .head b { font-size: 15px; }
+.toast .head span:not(:first-child) { color: var(--muted); }
+.toast .x { margin-left: auto; cursor: pointer; color: var(--muted); background: none; border: none; padding: 0 4px; font-size: 16px; line-height: 1; }
+.toast .sub { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.toast a { color: var(--accent); text-decoration: none; }
+.toast.notified a { color: var(--clear); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.rec.notice .rec-meta { margin-bottom: 0; }
 code { background: var(--bg); padding: 0 4px; border-radius: 4px; }

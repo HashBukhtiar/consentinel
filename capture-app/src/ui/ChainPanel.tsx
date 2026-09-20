@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { signConsentMessage, type ConsentView, type TxSigner } from "../../../registry/client/src/registry";
-import { defaultExpiresAt, explorerUrl } from "../../../registry/client/src/core";
+import { channelNames, defaultExpiresAt, explorerUrl } from "../../../registry/client/src/core";
 import type { ChainConsentCache } from "../consent/chainCache";
 import { detectWallet, loadDemoKeys, walletSigner, type DemoKeys, type WalletProvider } from "../consent/signers";
 import { flags } from "../config/flags";
@@ -17,7 +17,7 @@ import { flags } from "../config/flags";
 // process, and a connected wallet that owns a record signs for itself.
 type Busy = { text: string; url?: string; err?: boolean; pending?: boolean };
 
-export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
+export function ChainPanel({ cache, names = new Map() }: { cache: ChainConsentCache; names?: Map<string, string> }) {
   const [, force] = useState(0);
   useEffect(() => cache.subscribe(() => force((x) => x + 1)), [cache]);
   useEffect(() => { const t = setInterval(() => force((x) => x + 1), 1000); return () => clearInterval(t); }, []);
@@ -39,6 +39,7 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
 
   const st = cache.status;
   const records = cache.records();
+  const captures = cache.captures();
   const walletPk = wallet?.publicKey?.toBase58() ?? null; // live: null again after a disconnect
   const ago = (t: number) => (t ? `${Math.max(0, Math.round((Date.now() - t) / 1000))}s ago` : "never");
   const short = (s: string) => (s ? `${s.slice(0, 4)}…${s.slice(-4)}` : "—");
@@ -145,6 +146,26 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
           </div>
         );
       })}
+
+      <h3>Filmed &amp; notified <span className="muted">· on-chain notices ({captures.length})</span></h3>
+      {captures.slice(0, 6).map((c) => {
+        const told = c.notifiedAt > 0;
+        const clock = (s: number) => (s ? new Date(s * 1000).toLocaleTimeString() : "—");
+        return (
+          <div className="rec notice" key={c.address}>
+            <div className="rec-head">
+              <b>{c.badgeId}</b>
+              <span className={"pill " + (told ? "opt_in" : "opt_out")}>{told ? "notified" : "pending"}</span>
+              <span className="muted">{names.get(c.badgeId) ?? keys?.labels.get(c.badgeId) ?? ""}</span>
+              <a href={explorerUrl("address", c.address, st.cluster)} target="_blank" rel="noreferrer" title={`notice account ${c.address} — badge id + timestamps only`} style={{ marginLeft: "auto" }}>record ↗</a>
+            </div>
+            <div className="rec-meta muted">
+              filmed {clock(c.filmedAt)} · filed {clock(c.recordedAt)} · {told ? `told ${clock(c.notifiedAt)} via ${channelNames(c.channels).join(", ")}` : "not told yet"}
+            </div>
+          </div>
+        );
+      })}
+      {!captures.length && <div className="muted">none yet — an opted-out badge on camera files one (filmed), then a second transaction marks it told</div>}
 
       <div className="chainopts">
         <label title="Badge signs a 49-byte message with its own key; the relayer pays; the program verifies the Ed25519 signature on-chain (no SOL on the badge). Untick to sign the transaction directly as the owner.">

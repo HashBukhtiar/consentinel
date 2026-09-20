@@ -60,10 +60,11 @@ for (const b of seed.badges) {
   }
 }
 
-// camera authority (signs attest_capture) and the demo relayer (pays fees for
+// camera authority (signs attest_capture, and pays rent for every capture
+// notice it files — ~0.0016 SOL each) and the demo relayer (pays fees for
 // badge-signed updates from the operator panel) are funded by the deployer.
 const cam = ensureKeypair(cameraKeyPath(seed.cameraLabel));
-if (await topUp(conn, deployer, cam.publicKey, 0.02, 0.05)) console.log(`funded camera ${cam.publicKey.toBase58()} with 0.05 SOL`);
+if (await topUp(conn, deployer, cam.publicKey, 0.05, 0.2)) console.log(`funded camera ${cam.publicKey.toBase58()} with 0.2 SOL`);
 const relayer = ensureKeypair(RELAYER_KEY_PATH);
 if (await topUp(conn, deployer, relayer.publicKey, 0.05, 0.1)) console.log(`funded relayer ${relayer.publicKey.toBase58()} with 0.1 SOL`);
 const existingCam = await reg.fetchCamera(cam.publicKey);

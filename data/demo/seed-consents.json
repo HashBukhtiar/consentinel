@@ -1,5 +1,5 @@
 {
-  "_comment": "Demo seed for the on-chain registry. Badge ids are what the beacons blink (8-bit, two upper-case hex digits \u2014 the ID shown on the badge screen). `consent` is the initial on-chain state; flip it live on stage. Badges not listed here are auto-registered as opt_out by the service the first time a camera sees them.",
+  "_comment": "Demo seed for the on-chain registry. Badge ids are what the badge key shows (8-bit, two upper-case hex digits; the third digit on the badge screen is the CRC — id 27 shows 271, id 86 shows 86D). `consent` is the initial on-chain state; flip it live on stage. Badges not listed here are auto-registered as opt_out by the service the first time a camera sees them. `contact` is the organizer's off-chain directory the notify service uses to tell an opted-out person they were filmed (name for the popup, email for the dry-run mailer) — it never goes on-chain.",
   "cluster": "devnet",
   "cameraLabel": "cam-1",
   "eventId": "htn2026-demo",
@@ -7,22 +7,40 @@
     {
       "badgeId": "4E",
       "consent": false,
-      "label": "Maaz's real badge \u2014 opted OUT (blurred)"
+      "label": "Maaz's real badge — opted OUT (blurred)"
     },
     {
       "badgeId": "A1",
       "consent": false,
-      "label": "second badge (stub/synthetic) \u2014 opted OUT (blurred)"
+      "label": "second badge (stub/synthetic) — opted OUT (blurred)"
     },
     {
       "badgeId": "C3",
       "consent": true,
-      "label": "consenting badge (stub/synthetic) \u2014 opted IN (clear)"
+      "label": "consenting badge (stub/synthetic) — opted IN (clear)"
     },
     {
       "badgeId": "3D",
       "consent": false,
-      "label": "physical demo badge (the ID on its screen) \u2014 opted OUT (blurred)"
+      "label": "physical demo badge (the ID on its screen) — opted OUT (blurred)"
+    },
+    {
+      "badgeId": "27",
+      "consent": false,
+      "label": "Nehad's badge — opted OUT (blurred)",
+      "contact": {
+        "name": "Nehad Shikh Trab",
+        "email": "nehad.st@gmail.com"
+      }
+    },
+    {
+      "badgeId": "86",
+      "consent": false,
+      "label": "Hashim's badge — opted OUT (blurred)",
+      "contact": {
+        "name": "Hashim Bukhtiar",
+        "email": "hashbukhtiar@gmail.com"
+      }
     }
   ]
 }

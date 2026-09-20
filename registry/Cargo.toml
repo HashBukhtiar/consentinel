@@ -6,6 +6,9 @@ resolver = "2"
 overflow-checks = true
 lto = "fat"
 codegen-units = 1
+# size over speed: the devnet upgrade buffer must fit the deployer's balance
+# (rent ≈ 5 lamports/byte; the opt-level 3 build was 254 KB ≈ 1.29 SOL)
+opt-level = "z"
 [profile.release.build-override]
 opt-level = 3
 incremental = false
