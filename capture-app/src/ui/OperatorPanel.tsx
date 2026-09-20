@@ -8,6 +8,8 @@ import type { FilmEvent, Track } from "../shared/schema";
 // The demo surface: what the operator sees. Consent comes from the
 // Solana-synced cache (ChainPanel) — the stub toggles remain only for
 // CONSENT_SOURCE="stub" (no-network fallback).
+type RadioRow = Extract<OperatorMessage, { type: "radio" }>;
+
 export function OperatorPanel({ fps, source, tracks, events }: {
   fps: number; source: string; tracks: Track[]; events: FilmEvent[];
 }) {
@@ -15,10 +17,15 @@ export function OperatorPanel({ fps, source, tracks, events }: {
   useEffect(() => consentStore.subscribe(() => force((x) => x + 1)), []);
   const [svc, setSvc] = useState<Map<string, { alert?: string; provider?: string; attested?: { signature: string; explorer: string | null; count: number } }>>(new Map());
   const [svcUp, setSvcUp] = useState(false);
+  const [radio, setRadio] = useState<RadioRow[]>([]);
+  const [bridges, setBridges] = useState<number | null>(null);
   useEffect(() => {
     operatorLink.start();
     const t = setInterval(() => setSvcUp(operatorLink.connected), 1000);
     const off = operatorLink.subscribe((m: OperatorMessage) => {
+      if (m.type === "health") { const r = (m as any).radio; if (r) { setBridges(r.bridges ?? 0); if (Array.isArray(r.recent)) setRadio(r.recent.slice(-6).reverse().map((x: any) => ({ type: "radio", ...x }))); } return; }
+      if (m.type === "bridge") { setBridges(m.connected); return; }
+      if (m.type === "radio") { setRadio((prev) => [m, ...prev].slice(0, 6)); return; }
       setSvc((prev) => {
         const next = new Map(prev);
         if (m.type === "alert") next.set(m.eventId, { ...next.get(m.eventId), alert: m.text, provider: m.provider });
@@ -28,6 +35,16 @@ export function OperatorPanel({ fps, source, tracks, events }: {
     });
     return () => { clearInterval(t); off(); };
   }, []);
+
+  const radioNote = (r: RadioRow): { text: string; url?: string; err?: boolean } => {
+    if (r.dir === "down") return { text: r.delivered ? `→ badge via bridge` : "queued (no bridge connected)" };
+    const o = r.outcome;
+    if (!o) return { text: "" };
+    if (o.result === "relayed") return { text: `badge-signed → on-chain ${o.consent ? "opt_in" : "opt_out"} (rev ${o.revision})`, url: o.explorer };
+    if (o.result === "noop") return { text: "already on-chain; mirror re-sent" };
+    if (o.result === "ignored") return { text: o.note };
+    return { text: o.error, err: true };
+  };
   const blurred = tracks.filter((t) => t.blurred).length;
 
   return (
@@ -77,7 +94,7 @@ export function OperatorPanel({ fps, source, tracks, events }: {
         </>
       )}
 
-      <h3>Film events <span className="muted">→ badge buzz + ElevenLabs + on-chain hash</span> <span className={"dot " + (svcUp ? "ok" : "warn")} title={svcUp ? "notify service connected" : "notify service not connected"} /></h3>
+      <h3>Film events <span className="muted">→ badge alarm + ElevenLabs + on-chain hash</span> <span className={"dot " + (svcUp ? "ok" : "warn")} title={svcUp ? "notify service connected" : "notify service not connected"} /></h3>
       {events.map((e) => {
         const s = svc.get(e.eventId);
         return (
@@ -93,6 +110,19 @@ export function OperatorPanel({ fps, source, tracks, events }: {
         );
       })}
       {!events.length && <div className="muted">none yet</div>}
+
+      <h3>Badge radio <span className="muted">· CNS frames ↕ bridge</span> <span className={"dot " + (bridges ? "ok" : svcUp ? "warn" : "")} title={bridges ? `${bridges} radio bridge(s) on the air` : "no radio bridge connected — frames queue for GET /bridge/pending"} /></h3>
+      {radio.map((r, i) => {
+        const n = radioNote(r);
+        return (
+          <div className={"act " + (r.dir === "up" ? "push" : n.err ? "error" : "info")} key={`${r.at}-${i}`}>
+            <span className="t">{new Date(r.at).toLocaleTimeString()}</span>
+            <span className="x"><b>{r.dir === "down" ? "↓" : "↑"} {r.frame}</b> · {n.text}</span>
+            {n.url && <a href={n.url} target="_blank" rel="noreferrer">tx ↗</a>}
+          </div>
+        );
+      })}
+      {!radio.length && <div className="muted">{svcUp ? "no frames yet — a film-event sends CNSF, a consent change sends CNSC, the badge's A button sends CNSR" : "service offline"}</div>}
     </aside>
   );
 }

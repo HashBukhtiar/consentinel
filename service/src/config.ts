@@ -41,6 +41,10 @@ export const config = {
   ELEVENLABS_MODEL_ID: env("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
   PLAY_AUDIO_LOCALLY: bool("PLAY_AUDIO_LOCALLY", true),
   AUDIT_LOG: abs(env("AUDIT_LOG", "../data/audit/film-events.jsonl")),
+  /** Badge signing keys (badge-<ID>.json, written by `npm run seed`): the service signs CNSR radio requests with them. */
+  BADGE_KEYS_DIR: abs(env("BADGE_KEYS_DIR", "../registry/keys")),
+  /** While a radio bridge is connected, re-mirror every badge's consent this often (0 = off). Log pushes are the fast path. */
+  RADIO_SYNC_MS: Number(env("RADIO_SYNC_MS", "20000")),
   AUDIO_DIR: join(SERVICE_DIR, "audio"),
   /** Debounce identical spoken alerts per badge (the capture app already debounces FilmEvents). */
   ALERT_MIN_INTERVAL_MS: Number(env("ALERT_MIN_INTERVAL_MS", "8000")),

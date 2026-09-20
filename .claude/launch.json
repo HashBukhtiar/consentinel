@@ -2,18 +2,37 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "service",
+      "cwd": "service",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 8787
+    },
+    {
       "name": "capture-app",
       "cwd": "capture-app",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5173
     },
     {
       "name": "capture-app-localnet",
       "cwd": "capture-app",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "env": { "VITE_SOLANA_CLUSTER": "localnet", "VITE_SOLANA_RPC_URL": "http://127.0.0.1:8899" },
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "env": {
+        "VITE_SOLANA_CLUSTER": "localnet",
+        "VITE_SOLANA_RPC_URL": "http://127.0.0.1:8899"
+      },
       "port": 5173
     }
   ]

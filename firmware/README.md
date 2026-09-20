@@ -183,6 +183,11 @@ Three ways out, in order of preference:
    layout, then replay it. **This is the thing to go solve first** — everything
    else in my lane is already unblocked.
 2. **A Linux box with BlueZ**, which can craft extended advertising directly.
+   The laptop side of this is already done: `service/BADGE_PROTOCOL.md` §2 —
+   `npm run bridge -- --port /dev/cu.usbserial-XXXX` relays one frame per
+   serial line to the service, which produces `CNSF`/`CNSC` and turns `CNSR`
+   into the on-chain update. The sketch only needs "line in → LUA1 frame out"
+   and "frame heard → line out".
 3. **Cut the downlink.** The hero path survives it: the beacon, the blur and
    the on-chain revoke→blur-flip all work uplink-free. Only the badge-side
    alarm in Phase 4 needs it, and the ElevenLabs alert plays from the laptop

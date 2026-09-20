@@ -3,11 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Consentinel notify + audit service: FilmEvent → badge buzz + ElevenLabs alert, tamper-evident audit log anchored on Solana, badge-signed consent relay",
+  "description": "Consentinel notify + audit service: FilmEvent \u2192 badge buzz + ElevenLabs alert, tamper-evident audit log anchored on Solana, badge-signed consent relay",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "tsx test/audit.test.ts",
+    "bridge": "tsx scripts/serial-bridge.mts",
+    "smoke": "tsx scripts/smoke.mts",
+    "test": "tsx test/audit.test.ts && tsx test/radio.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
