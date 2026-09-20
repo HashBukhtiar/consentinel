@@ -4,6 +4,7 @@ import { listCameras, startCamera, startScreen, startGlasses } from "../sources/
 import { flags } from "../config/flags";
 import { setMaskImage } from "../vision/blur";
 import { OperatorPanel } from "./OperatorPanel";
+import { NoticeToasts } from "./NoticeToast";
 import { chain, startConsent } from "../consent/store";
 import type { FilmEvent, Track } from "../shared/schema";
 
@@ -107,6 +108,7 @@ export function App() {
             onDrop={(e) => { e.preventDefault(); setDropping(false); loadIcon(e.dataTransfer.files[0]); }}>
             {running && <button className="stop float" onClick={stop} title="Stop capture">Stop</button>}
             <canvas ref={canvasRef} className="feed" />
+            <NoticeToasts />
             {running ? (
               <div className="hud" aria-live="polite">
                 <span><b>{tracks.length}</b> in frame</span>

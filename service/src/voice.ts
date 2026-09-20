@@ -58,6 +58,7 @@ export class Voice {
   }
 }
 
-export function alertText(beaconId: string, cameraId: string): string {
-  return `Heads up: badge ${beaconId.split("").join(" ")}, you were just recorded by camera ${cameraId}. Your face is blurred because you have not opted in.`;
+export function alertText(beaconId: string, cameraId: string, name?: string): string {
+  const who = name ? `${name.split(" ")[0]}, badge ${beaconId.split("").join(" ")}` : `badge ${beaconId.split("").join(" ")}`;
+  return `Heads up ${who}: you were just recorded by camera ${cameraId}. Your face is blurred because you have not opted in.${name ? " We are sending you the details." : ""}`;
 }

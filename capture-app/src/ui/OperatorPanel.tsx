@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { consentStore } from "../stubs/consentStore";
 import { chain } from "../consent/store";
-import { operatorLink, type OperatorMessage } from "../events/operatorLink";
+import { operatorLink, type NoticeMsg, type OperatorMessage } from "../events/operatorLink";
 import { ChainPanel } from "./ChainPanel";
 import type { FilmEvent, Track } from "../shared/schema";
 
@@ -27,12 +27,20 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
   // beaconId → time a CNSF frame was actually delivered over the radio bridge
   const [radioOk, setRadioOk] = useState<Map<string, number>>(new Map());
   const [ledger, setLedger] = useState<ThruRow[]>([]); // recent Thru commits (film-events + attest checkpoints)
+  // the notice path per capture (filed on-chain → told → told on-chain) and the organizer's directory (badge → name)
+  const [notices, setNotices] = useState<Map<string, NoticeMsg>>(new Map());
+  const [names, setNames] = useState<Map<string, string>>(new Map());
   useEffect(() => {
     operatorLink.start();
     const t = setInterval(() => setSvcUp(operatorLink.connected), 1000);
     const off = operatorLink.subscribe((m: OperatorMessage) => {
-      if (m.type === "health") { const r = (m as any).radio; if (r) { setBridges(r.bridges ?? 0); if (Array.isArray(r.recent)) setRadio(r.recent.slice(-6).reverse().map((x: any) => ({ type: "radio", ...x }))); } return; }
+      if (m.type === "health") {
+        const r = (m as any).radio; if (r) { setBridges(r.bridges ?? 0); if (Array.isArray(r.recent)) setRadio(r.recent.slice(-6).reverse().map((x: any) => ({ type: "radio", ...x }))); }
+        const nt = (m as any).notify; if (nt && Array.isArray(nt.contacts)) setNames(new Map(nt.contacts.map((c: any) => [String(c.badgeId).toUpperCase(), c.name])));
+        return;
+      }
       if (m.type === "bridge") { setBridges(m.connected); return; }
+      if (m.type === "notice") { setNotices((prev) => new Map(prev).set(m.eventId, m)); return; }
       if (m.type === "radio") {
         setRadio((prev) => [m, ...prev].slice(0, 6));
         if (m.dir === "down" && m.frame.startsWith("CNSF") && (m.delivered ?? 0) > 0) {
@@ -114,7 +122,7 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
       )}
 
       {chain ? (
-        <ChainPanel cache={chain} />
+        <ChainPanel cache={chain} names={names} />
       ) : (
         <>
           <h3>Consent <span className="muted">stub · no network</span></h3>
@@ -139,10 +147,13 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
       {events.map((e) => {
         const s = svc.get(e.eventId);
         const n = notified(e);
+        const nt = notices.get(e.eventId);
+        const name = nt?.person?.name ?? names.get(e.beaconId.toUpperCase());
         return (
           <div className="event" key={e.eventId}>
             <div>
               <span className="mono">{e.beaconId}</span>
+              {name && <span className="name">{name}</span>}
               <span className="muted">captured while opted out</span>
               {n === "notified" && <span className="tagx ok" title="the film-event reached this badge">notified</span>}
               {n === "queued" && <span className="tagx" title="no badge transport connected — frame is queued for the bridge">queued</span>}
@@ -151,6 +162,15 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
                 ? <a href={s.attested.explorer} target="_blank" rel="noreferrer" title={`anchored on-chain in commitment #${s.attested.count}`}>anchored ↗</a>
                 : <span className="tagx" title="anchored (confirmed from on-chain state)">anchored</span>)}
               {s?.thru && <a href={s.thru.explorer} target="_blank" rel="noreferrer" title={`committed to the Thru evidence ledger in ${(s.thru.ms / 1000).toFixed(1)}s — account ${s.thru.account}`}>Thru ↗</a>}
+              {nt?.capture && (nt.capture.explorer
+                ? <a href={nt.capture.explorer} target="_blank" rel="noreferrer" title={`record_capture: filmed ${time(nt.filmedAt)}, filed ${time(nt.capture.recordedAt * 1000)} (chain clock) — account ${nt.capture.address}`}>filed ↗</a>
+                : <span className="tagx" title="filed on-chain (confirmed from on-chain state)">filed</span>)}
+              {nt?.notice && (nt.notice.explorer
+                ? <a href={nt.notice.explorer} target="_blank" rel="noreferrer" title={`record_notice: told ${time(nt.notice.notifiedAt * 1000)} via ${nt.notice.channels.join(", ")}`}>told ↗</a>
+                : <span className="tagx ok" title="told (confirmed from on-chain state)">told</span>)}
+              {nt?.stage === "coalesced" && <span className="tagx" title={`covered by the notice filed for the capture at ${nt.coveredBy ? time(nt.coveredBy.at) : "?"} (one receipt per badge per minute)`}>covered</span>}
+              {nt?.stage === "unreachable" && <span className="tagx" title="no contact on file and no live channel — the capture is filed, there was nobody to tell">no contact</span>}
+              {nt?.stage === "error" && <span className="tagx" style={{ color: "var(--blur)" }} title={nt.error}>notice failed</span>}
             </div>
             <span>{time(e.at)}</span>
           </div>

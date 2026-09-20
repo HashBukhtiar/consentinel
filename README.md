@@ -58,7 +58,12 @@ that commits to the off-chain film-event log).
 3. **Camera → service (FilmEvent).** An opted-out person on camera fires a
    FilmEvent (id + time + camera, never pixels) to `service/`: audit log →
    `CNSF` radio frame to the badge (red alarm) → ElevenLabs voice → folded into
-   the next on-chain commitment.
+   the next on-chain commitment → **notice**: the camera key files
+   `record_capture` (when they were filmed), the person is told (email — a
+   dry-run in the demo — plus the badge alarm and the voice), and
+   `record_notice` stamps when and how. Both land as one on-chain record per
+   film-event; the app pops "*Hashim Bukhtiar has been notified — email
+   sent*" with a link to each transaction.
 4. **Badge → chain (write).** The badge's A button sends `CNSR<id><0|1>` over
    radio. The service signs the 49-byte delegated message with that badge's
    key and relays it; the program verifies the Ed25519 signature on-chain; the
@@ -121,11 +126,21 @@ Then, in order:
    **`delete record…`** on a card really deletes the on-chain record (it asks
    first): the badge is then unregistered ⇒ always blurred until it is seen
    again and auto-registered.
-4. **Film event** — with `4E` opted out and on camera: the panel lists the
-   event, the laptop speaks (ElevenLabs, or macOS `say` labeled as fallback),
-   the **Badge radio** section shows `↓ CNSF4E`, and within 10 s the event is
-   anchored (`⛓ #n ↗` links to the transaction). `GET /audit/verify` proves
-   the log matches the chain.
+4. **Film event → notice** — with an opted-out badge on camera (`271` on the
+   screen = Nehad, `86D` = Hashim; the two demo contacts live in
+   `data/demo/seed-consents.json`): a popup over the feed says *Nehad Shikh
+   Trab was filmed at 12:01:03 — recording on Solana…*, turns into *has been
+   notified — email sent to n•••@gmail.com* a few seconds later, and links
+   the two transactions (`⛓ filmed ↗`, `⛓ notified ↗`) plus the notice
+   account. The laptop speaks (ElevenLabs, or macOS `say` labeled as
+   fallback), the **Badge radio** section shows `↓ CNSF27`, the **Filmed &
+   notified** list in the consent panel shows the on-chain record (filmed /
+   filed / told, straight from the cache), and within 10 s the event is also
+   folded into the camera's commitment (`#n ↗`). `GET /audit/notices?badge=27`
+   reads the notices back from the chain; `GET /audit/verify` proves the
+   log matches the chain. The email itself is a **dry-run**: composed and
+   appended to `data/audit/notices.jsonl`, never sent — the on-chain notice
+   is the real artefact, and `/health` says `email dry-run`.
 5. **Smoke test without a camera** — `cd service && npm run smoke` drives
    FilmEvent → CNSF, CNSR → badge-signed relay → on-chain flip → CNSC, and
    waits for the attestation. Run it before going on stage.
@@ -169,6 +184,18 @@ the *Localnet* section below, then `scripts/dev.sh localnet`.
 - **Per-event overrides** (`set_event_override`): "blur me everywhere except
   the closing ceremony" is a second PDA keyed by `(badge, sha256(event_id))`,
   owned by the badge owner and clearable even after the record is closed.
+- **Capture notices** (`record_capture` / `record_notice`): for every
+  film-event of an opted-out badge the camera key files a `CaptureNotice`
+  PDA keyed by `(camera, sha256(FilmEvent))` — the same hash the audit log
+  stores for that entry — holding `filmed_at` (camera clock), `recorded_at`
+  and `notified_at` (chain clock) and the channels the person was told over.
+  Only the registered camera can write it, nobody can delete it, and it is
+  single-use: "told" cannot be re-dated. It is the person's evidence that a
+  camera saw them without consent *and* that they were told, and it carries no
+  name, email or image — the badge id is the only key, the organizer's
+  directory (off-chain) turns it into a person. The constant-cadence
+  commitment stream still covers the whole log; the notice is the per-person
+  receipt for the one case where a receipt is owed.
 - **Delete** (`close_consent`): rent back to the owner; absence ⇒ fail-safe blur.
 
 Program id (devnet + localnet): `UKoViTT9288nMeBzjeMoHBBmxHfXvbg6F1gF6pjiSW7`.
@@ -259,7 +286,16 @@ npm run watch                              # tail events from a second terminal
 Audit: `GET http://localhost:8787/audit/verify` recomputes the local hash
 chain from raw fields and compares it to the on-chain head (reports
 `mismatches` and `unanchored`). `GET /audit/events?badge=4E` (bearer token
-if `SERVICE_TOKEN` is set) feeds the "who filmed me?" layer.
+if `SERVICE_TOKEN` is set) feeds the "who filmed me?" layer, and
+`GET /audit/notices?badge=4E` returns the camera's on-chain notices for that
+badge (filmed_at / notified_at / channels, one `getProgramAccounts`).
+One camera key per running service: a second laptop attesting with a copy of
+the same `keys/camera-cam-1.json` forks the two local logs from the chain
+(`/audit/verify` reports it on both). Give that machine its own camera
+(delete its `keys/camera-cam-1.json`, re-run `npm run seed` there), then
+`npm run rebuild-audit` in `service/` re-derives this log's batch list from
+the chain's own `CaptureAttested` events (keeps every local film-event; the
+old file is kept as `.bak`).
 
 ### Flags
 
@@ -270,7 +306,10 @@ no-network fallback), `SOLANA_CLUSTER` (the RPC URL follows unless
 `CONSENT_CACHE_SYNC_MS`, `CONSENT_STALE_MS`, `EVENT_ID`, `FILM_EVENT_ENDPOINT`,
 `SERVICE_TOKEN`, `SERVICE_WS_URL`, `DEFAULT_CONSENT = blur`.
 Service flags: `service/.env.example` (`SERVICE_TOKEN`, `CORS_ORIGIN`,
-`ATTEST_INTERVAL_MS`, `ATTEST_HEARTBEAT`, `BADGE_KEYS_DIR`, `RADIO_SYNC_MS`, …).
+`ATTEST_INTERVAL_MS`, `ATTEST_HEARTBEAT`, `BADGE_KEYS_DIR`, `RADIO_SYNC_MS`,
+`NOTIFY_ON_CHAIN`, `CONTACTS_FILE`, `NOTICE_LOG`, `NOTICE_MIN_INTERVAL_MS` — one
+on-chain notice per badge per minute; a badge that stays in frame keeps firing
+film-events for the alarm, and they are covered by that notice, …).
 
 ### Judge Q&A (built in, not just pitched)
 
@@ -287,6 +326,7 @@ Service flags: `service/.env.example` (`SERVICE_TOKEN`, `CORS_ORIGIN`,
 | The badge has no Wi-Fi — how does it talk to the chain? | Light up (id only) and BLE radio down/up through a bridge. The service is the badge's registry client: it turns `CNSR` into the signed update and mirrors every on-chain change back as `CNSC`. |
 | Doesn't the operator hold everyone's keys in the demo? | Only because the firmware isn't signing yet — see the honesty note above; `badge-press` from another process shows the same path, and a wallet that owns a record signs for itself. |
 | Default for someone with no badge? | Blur. |
+| How does someone who opted out know they were filmed? | The camera files it on-chain (`record_capture`: badge id + when), the service tells them (badge alarm, voice, email — a dry-run in the demo) and files that too (`record_notice`: when + how). The record is theirs to point at; it names no one. |
 
 ## Thru (Unto Labs) — the evidence ledger
 

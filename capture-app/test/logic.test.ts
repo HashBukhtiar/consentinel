@@ -75,7 +75,7 @@ const cache = new ChainConsentCache("http://127.0.0.1:8899", { autoFetch: false,
 const rec = (badgeId: string, consent: boolean, revision: number, owner = "o") => ({
   badgeId, badgeIdNum: parseInt(badgeId, 16), owner, consent, revision, instance: 1, createdAt: 1, updatedAt: 1, address: "a",
 });
-const snap = (consents: any[], slot: number, overrides: any[] = []) => ({ registry: null, consents, overrides, cameras: [], slot });
+const snap = (consents: any[], slot: number, overrides: any[] = []) => ({ registry: null, consents, overrides, cameras: [], captures: [], slot });
 assert.equal(cache.get("A1B2"), "unknown", "empty cache ⇒ unknown ⇒ blur");
 cache.applySnapshot(snap([rec("A1B2", false, 0), rec("C3D4", true, 0)], 100));
 cache.status.freshAt = clock; // applySnapshot alone doesn't stamp freshness; syncNow does
@@ -119,14 +119,14 @@ assert.equal(cache.get("C3D4"), "opt_in", "a fresh push restores authority");
 // 4b) partial refresh (getMultipleAccounts path): updates + closes only what it queried
 {
   const c2 = new ChainConsentCache("http://127.0.0.1:8899", { autoFetch: false, cluster: "localnet", now: () => clock });
-  c2.applySnapshot({ registry: null, consents: [rec("1A", true, 0, "o1"), rec("2B", false, 0, "o2")], overrides: [], cameras: [], slot: 100 });
+  c2.applySnapshot({ registry: null, consents: [rec("1A", true, 0, "o1"), rec("2B", false, 0, "o2")], overrides: [], cameras: [], captures: [], slot: 100 });
   c2.status.freshAt = clock; // applySnapshot alone doesn't stamp freshness; syncNow does
   // a partial that only mentions 1A must NOT drop 2B
-  c2.applyPartial({ registry: null, consents: [{ ...rec("1A", false, 1, "o1") }], overrides: [], cameras: [], slot: 101 });
+  c2.applyPartial({ registry: null, consents: [{ ...rec("1A", false, 1, "o1") }], overrides: [], cameras: [], captures: [], slot: 101 });
   assert.equal(c2.get("1A"), "opt_out", "partial refresh updates the queried record");
   assert.equal(c2.get("2B"), "opt_out", "partial refresh leaves unqueried records alone");
   // an older partial cannot overwrite a newer state
-  c2.applyPartial({ registry: null, consents: [{ ...rec("1A", true, 0, "o1") }], overrides: [], cameras: [], slot: 90 });
+  c2.applyPartial({ registry: null, consents: [{ ...rec("1A", true, 0, "o1") }], overrides: [], cameras: [], captures: [], slot: 90 });
   assert.equal(c2.get("1A"), "opt_out", "stale partial is ignored (slot-ordered)");
   console.log("ok — chain cache partial refresh: targeted update, no collateral drops, slot-ordered");
 }

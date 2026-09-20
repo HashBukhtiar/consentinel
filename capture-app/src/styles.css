@@ -184,3 +184,26 @@ button.stop.float { position: absolute; top: 14px; right: 14px; z-index: 2; padd
 button.stop.float::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: #fff; margin-right: 8px; vertical-align: 0; }
 button.stop.float:hover { background: var(--blur); border-color: rgba(255, 255, 255, .3); }
 .maskgroup { display: inline-flex; align-items: center; gap: 6px; }
+/* ---- notice popups over the feed (filmed → notified, with the on-chain links) ---- */
+.toasts { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none; z-index: 2; }
+.toast { pointer-events: auto; background: rgba(9, 12, 19, .86); border: 1px solid rgba(91, 140, 255, .55); border-radius: 12px;
+  padding: 10px 13px; font-size: 13px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); animation: toast-in .25s ease-out; }
+.toast.notified { border-color: rgba(53, 208, 122, .6); }
+.toast.error { border-color: rgba(255, 93, 115, .6); }
+.toast .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.toast .head b { font-size: 14.5px; font-weight: 600; }
+.toast .head span:not(:first-child) { color: var(--muted); }
+.toast .x { margin-left: auto; cursor: pointer; color: var(--muted); background: none; border: none; padding: 0 4px; font-size: 16px; line-height: 1; }
+.toast .x:hover { color: var(--fg); border: none; }
+.toast .sub { color: var(--muted); font-family: var(--mono); font-size: 11.5px; margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.toast a { color: var(--accent); }
+.toast.notified a { color: var(--clear); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+.event .name { color: var(--fg); }
+
+/* toasts and the floating Stop pill share the feed's top edge: leave the pill its corner */
+.toasts { right: 112px; }
+button.stop.float { z-index: 3; }
