@@ -176,3 +176,36 @@ code { font-family: var(--mono); background: var(--card-2); padding: 1px 5px; bo
 @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 .event .name { color: var(--fg); }
+
+/* ---- badge setup (organizer pre-flight, reachable from the topbar) ---- */
+.setup-open { cursor: pointer; background: none; font-family: inherit;
+  color: var(--fg); border-color: rgba(91, 140, 255, .45); }
+.setup-open:hover { color: var(--accent); border-color: var(--accent); background: rgba(91, 140, 255, .08); }
+.setup-open span { color: var(--accent); font-size: 12.5px; line-height: 1; }
+
+.setup-dlg { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--fg);
+  padding: 0; width: min(720px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; }
+.setup-dlg::backdrop { background: rgba(4, 6, 10, .66); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.dlg-body { padding: 18px 20px 20px; }
+.dlg-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.dlg-head h2 { font-size: 16px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+.dlg-meta { display: flex; flex-wrap: wrap; gap: 4px 9px; align-items: baseline; font-size: 11.5px; color: var(--muted); }
+.dlg-meta .mono { font-family: var(--mono); color: var(--fg); }
+.dlg-x { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 22px;
+  line-height: 1; padding: 0 2px; cursor: pointer; }
+.dlg-x:hover { color: var(--fg); border: none; }
+
+.btnrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.setup-dlg a.toggle { display: inline-block; text-decoration: none; }
+.setup-dlg a.toggle:hover { color: var(--accent); border-color: rgba(91, 140, 255, .5); }
+.steps { margin: 0 0 12px; padding-left: 22px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.steps li { margin-bottom: 5px; }
+.steps li::marker { color: var(--faint); font-family: var(--mono); font-size: 11.5px; }
+.steps b { color: var(--fg); font-weight: 600; }
+.steps em { color: var(--warn); font-style: normal; }
+.setup-note { font-size: 12.5px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
+.setup-note b { color: var(--fg); font-family: var(--mono); font-weight: 600; }
+.luasrc { max-height: 42vh; overflow: auto; margin: 0; padding: 11px 12px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 9px; font-family: var(--mono); font-size: 11px;
+  line-height: 1.5; color: var(--muted); white-space: pre; user-select: text; cursor: text; }
+@media (prefers-reduced-motion: reduce) { .setup-dlg::backdrop { backdrop-filter: none; } }

@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "sweep": "tsx test/sweep.mts",
-    "test": "tsx test/safety.test.ts && tsx test/logic.test.ts && tsx test/decode.test.ts",
+    "test": "tsx test/safety.test.ts && tsx test/logic.test.ts && tsx test/decode.test.ts && tsx test/badgeapp.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
