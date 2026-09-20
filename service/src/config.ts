@@ -68,8 +68,38 @@ export const config = {
   NOTIFY_ON_CHAIN: bool("NOTIFY_ON_CHAIN", true),
   /** Organizer's directory badge → person (the `contact` field of each seed badge). Never on-chain. */
   CONTACTS_FILE: abs(env("CONTACTS_FILE", "../data/demo/seed-consents.json")),
-  /** Email transport. The demo ships only `dry-run`: composed + logged, nothing sent. */
-  EMAIL_MODE: "dry-run" as const,
+  /**
+   * Email transport. `dry-run` composes + logs and sends nothing — and, since
+   * nobody was actually told, does NOT set CHANNEL_EMAIL in the on-chain
+   * notice. `send` posts through Resend and sets the bit only on a 2xx.
+   * Defaults to dry-run so a missing key can never silently stop notices.
+   */
+  EMAIL_MODE: (/^send$/i.test(env("EMAIL_MODE", "dry-run")) ? "send" : "dry-run") as "dry-run" | "send",
+  RESEND_API_KEY: env("RESEND_API_KEY"),
+  /**
+   * Demo delivery redirect. When set, every notice email is DELIVERED here
+   * regardless of the contact's address — the way `onboarding@resend.dev` needs
+   * it, since the sandbox sender only reaches the account owner.
+   *
+   * The contact's own address is what the operator screen shows and what the
+   * notice log records as `to`; this is the envelope recipient only. It is
+   * disclosed in /health, the startup banner and NOTICE_LOG (as `redirectedTo`)
+   * — deliberately not on the operator panel, which keeps showing the person.
+   *
+   * Note this makes CHANNEL_EMAIL mean "a mail was sent about this person",
+   * not "this person received it". Leave unset for anything real.
+   */
+  EMAIL_REDIRECT_TO: env("EMAIL_REDIRECT_TO"),
+  /** Must be a Resend-verified sender. `onboarding@resend.dev` works with no domain setup. */
+  EMAIL_FROM: env("EMAIL_FROM", "Consentinel <onboarding@resend.dev>"),
+  EMAIL_REPLY_TO: env("EMAIL_REPLY_TO"),
+  EMAIL_TIMEOUT_MS: Number(env("EMAIL_TIMEOUT_MS", "8000")),
+  /**
+   * SMS is plumbed end to end (CHANNEL_SMS, `contact.phone`, notice state) but
+   * has no transport yet, so it never sets its bit. Wiring one up means
+   * implementing `sendSms()` the way `email.ts` does it — nothing else changes.
+   */
+  SMS_MODE: "off" as const,
   /** Where composed emails and notice outcomes are appended (JSONL; holds addresses — gitignored dir). */
   NOTICE_LOG: abs(env("NOTICE_LOG", "../data/audit/notices.jsonl")),
   /** One on-chain notice per badge per this window; film-events inside it are covered by the last notice (still audited + attested). */

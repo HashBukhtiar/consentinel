@@ -19,10 +19,11 @@ export interface NoticeMsg {
   eventHash: string;
   cameraId: string;
   filmedAt: number; // ms, camera clock
-  person: { name: string; email?: string } | null; // email masked
+  person: { name: string; email?: string; phone?: string } | null; // email + phone masked
   capture?: { signature: string; explorer: string; address: string; addressExplorer: string; recordedAt: number }; // unix s, chain clock
   notice?: { signature: string; explorer: string; notifiedAt: number; channels: string[] }; // unix s, chain clock
-  email?: { to: string; subject: string; mode: string; at: number };
+  /** only `sent` sets CHANNEL_EMAIL in the on-chain notice */
+  email?: { to: string; subject: string; mode: "dry-run" | "sent" | "failed"; at: number; id?: string; error?: string; ms?: number };
   /** `coalesced`: covered by the notice filed for that earlier film-event of the same badge */
   coveredBy?: { eventId: string; at: number };
   error?: string;
