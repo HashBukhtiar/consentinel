@@ -53,7 +53,9 @@ if [ -d "$ROOT/registry/node_modules" ]; then
   if [ "$MODE" = "devnet" ]; then
     for k in relayer camera-cam-1; do
       b=$(solana balance -u devnet "$ROOT/registry/keys/$k.json" 2>/dev/null | awk '{print $1}')
-      if [ -n "$b" ]; then awk -v b="$b" 'BEGIN{exit !(b>=0.02)}' && pass "$k balance $b SOL" || fail "$k balance $b SOL (low)" "cd registry && npm run seed   # tops up from the deployer"; fi
+      # the camera pays rent for every capture notice it files (~0.0016 SOL each), so it needs more headroom than the relayer
+      min=0.02; [ "$k" = "camera-cam-1" ] && min=0.05
+      if [ -n "$b" ]; then awk -v b="$b" -v m="$min" 'BEGIN{exit !(b>=m)}' && pass "$k balance $b SOL" || fail "$k balance $b SOL (low; need ≥ $min)" "cd registry && npm run seed   # tops up from the deployer"; fi
     done
   fi
 fi
