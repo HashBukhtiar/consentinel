@@ -11,6 +11,7 @@ export const REGISTRY_SEED = "registry";
 export const CONSENT_SEED = "consent";
 export const OVERRIDE_SEED = "override";
 export const CAMERA_SEED = "camera";
+export const CAPTURE_SEED = "capture";
 
 /** Must equal `CONSENT_MSG_PREFIX` in the program. */
 export const CONSENT_MSG_PREFIX = new TextEncoder().encode("consentinel/consent/v1");
@@ -20,6 +21,21 @@ export const MAX_DELEGATED_TTL_SECS = 24 * 60 * 60;
 /** What the badge/operator uses by default: enough for a slow relay, not enough to hoard. */
 export const DEFAULT_DELEGATED_TTL_SECS = 120;
 export const MAX_EVENT_ID_LEN = 32;
+/** `record_capture` rejects a `filmed_at` further ahead of the chain clock than this. */
+export const MAX_CAPTURE_SKEW_SECS = 5 * 60;
+/** `CaptureNotice.channels` bits — how the person was told. Mirrors `CHANNEL_*` in the program. */
+export const CHANNEL_EMAIL = 1;
+export const CHANNEL_BADGE_RADIO = 2;
+export const CHANNEL_VOICE = 4;
+
+/** Human names for a `channels` bit set, e.g. 3 → ["email", "badge radio"]. */
+export function channelNames(mask: number): string[] {
+  const out: string[] = [];
+  if (mask & CHANNEL_EMAIL) out.push("email");
+  if (mask & CHANNEL_BADGE_RADIO) out.push("badge radio");
+  if (mask & CHANNEL_VOICE) out.push("voice");
+  return out;
+}
 
 // ---- badge ids -------------------------------------------------------------
 // The beacon blinks an 8-bit id today (two upper-case hex digits, `hex2()` in
@@ -84,6 +100,17 @@ export function overridePda(
 
 export function cameraPda(authority: PublicKey, programId: PublicKey = CONSENT_REGISTRY_PROGRAM_ID): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([utf8(CAMERA_SEED), authority.toBytes()], programId);
+}
+
+/**
+ * The notice a camera files for one film-event of an opted-out badge:
+ * `["capture", camera authority, event_hash]`, where `event_hash` is
+ * `filmEventHash(event)` — the same 32 bytes the audit log stores for that
+ * entry, so the on-chain notice and the off-chain log entry name each other.
+ */
+export function capturePda(authority: PublicKey, eventHash: Uint8Array, programId: PublicKey = CONSENT_REGISTRY_PROGRAM_ID): [PublicKey, number] {
+  if (eventHash.length !== 32) throw new Error("event hash must be 32 bytes");
+  return PublicKey.findProgramAddressSync([utf8(CAPTURE_SEED), authority.toBytes(), eventHash], programId);
 }
 
 // ---- delegated consent message --------------------------------------------
@@ -156,6 +183,25 @@ export function fromHex(h: string): Uint8Array {
   if (s.length % 2) throw new Error("odd hex length");
   const out = new Uint8Array(s.length / 2);
   for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
+/** Base58 (Bitcoin alphabet) of arbitrary bytes — for `getProgramAccounts` memcmp filters. */
+export function toBase58(bytes: Uint8Array | number[]): string {
+  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const digits = [0];
+  for (const byte of bytes) {
+    let carry = byte;
+    for (let i = 0; i < digits.length; i++) {
+      carry += digits[i] << 8;
+      digits[i] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    while (carry > 0) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+  }
+  let out = "";
+  for (const b of bytes) { if (b !== 0) break; out += "1"; }
+  for (let i = digits.length - 1; i >= 0; i--) out += ALPHABET[digits[i]];
   return out;
 }
 

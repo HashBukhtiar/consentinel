@@ -3,9 +3,9 @@
 **Your face, your rules — enforced by light and owned on-chain.**
 
 A consent-respecting video-capture pipeline for Hack the North 2026. HTN badges
-blink a coded light beacon carrying a short id; the capture app decodes the
-beacons from the video, associates each with the nearest face, and **blurs
-everyone who has not opted in**. Each person's consent is a **signed,
+show a coded light key carrying a short id; the capture app reads the keys
+from the video, associates each with the nearest face, and **blurs everyone
+who has not opted in**. Each person's consent is a **signed,
 revocable record they own on Solana**. When an opted-out person is captured,
 their badge buzzes and an ElevenLabs voice tells them.
 
@@ -25,6 +25,7 @@ that commits to the off-chain film-event log).
 | `firmware/` | the badge: Lua app that blinks the optical beacon, mirrors consent, raises the alarm, sends `CNSR` on the A button | A |
 | `shared/beacon.ts` | the optical + radio wire format (badge ↔ capture app ↔ service) | A |
 | `capture-app/` | the CV core (web/TS): camera → detect → decode → associate → blur → FilmEvent, plus the operator panel | A (beacon decode) + B (vision) |
+| `glasses-relay/` | the iOS app that carries Meta glasses frames to the capture app (the glasses only talk to a phone) | B |
 | `registry/` | **Solana**: Anchor program (`consent_registry`), tests, TS client, demo scripts | C |
 | `service/` | notify + audit service: FilmEvent → badge radio alarm + ElevenLabs + on-chain attestation; badge radio bridge; badge-signed consent relay | C |
 | `data/demo/` | seed consents for the demo | C |
@@ -44,15 +45,25 @@ that commits to the off-chain film-event log).
                                         attest_capture every 10 s (hash of the film-event log, or heartbeat)
 ```
 
-1. **Badge → camera (light).** The badge blinks its 8-bit id (`4E`). The app's
-   optical decoder (`capture-app/src/decode/beacon.ts`) finds the patch, decodes
-   the id with A's `decodeFrame`, and binds it to the nearest face above.
+1. **Badge → camera (light).** The badge shows a STATIC key: three giant
+   7-segment hex digits, `id(8) << 4 | crc4(id)` (id `27` shows `271`), MINT
+   for opt-in and ROSE for opt-out, on black (the ring around the digits is
+   painted black since the webcam runs: white bloomed into the last digit).
+   The app's decoder (`capture-app/src/decode/key.ts`) finds the digits, fits
+   the grid, reads all three, checks the CRC, and binds the id to the nearest
+   face above. One clean frame is enough; nothing blinks. The status LEDs are
+   filtered out by their white-cored halo, but keep them dim (LED_LEVEL 64).
 2. **Camera → chain (read).** The face is clear only if the chain-synced cache
    says that id is `opt_in`. Unknown, stale, no badge ⇒ blur.
 3. **Camera → service (FilmEvent).** An opted-out person on camera fires a
    FilmEvent (id + time + camera, never pixels) to `service/`: audit log →
    `CNSF` radio frame to the badge (red alarm) → ElevenLabs voice → folded into
-   the next on-chain commitment.
+   the next on-chain commitment → **notice**: the camera key files
+   `record_capture` (when they were filmed), the person is told (email — a
+   dry-run in the demo — plus the badge alarm and the voice), and
+   `record_notice` stamps when and how. Both land as one on-chain record per
+   film-event; the app pops "*Hashim Bukhtiar has been notified — email
+   sent*" with a link to each transaction.
 4. **Badge → chain (write).** The badge's A button sends `CNSR<id><0|1>` over
    radio. The service signs the 49-byte delegated message with that badge's
    key and relays it; the program verifies the Ed25519 signature on-chain; the
@@ -76,25 +87,60 @@ scripts/dev.sh                # service (:8787) + capture app (:5173), Ctrl+C st
 
 Then, in order:
 
-1. **Badge** — install `firmware/consentinel-beacon.lua` on the HTN badge
-   (`firmware/README.md` §2), open *Consentinel*; it shows `ID 4E` and blinks.
-   No badge? The app's **Synthetic badge** button overlays a real-format `4E`
-   beacon on your webcam.
+1. **Badge** — push `firmware/consentinel-beacon.lua` to the HTN badge
+   (`firmware/README.md` §2), open *Consentinel*. The CONFIG screen shows the
+   wearer's `KEY` (three hex digits, e.g. `271` = id `27` + CRC nibble) and
+   `OPT-IN`/`OPT-OUT`; **A** toggles consent, **START arms the beacon** (the
+   three giant digits; UP/DOWN dims them, any other key returns to CONFIG;
+   **LEFT** turns the six LEDs off — do that if their glare lands on the
+   screen; the debug HUD's `ms/frame` line shows where the frame time goes). Any badge works: the first time a camera sees an id with no
+   record, the service registers it as `opt_out` (organizer key), so its card
+   appears in the panel within a few seconds. No badge? **Synthetic badge** in
+   the app paints a real-format `4E` key (works without a camera too).
 2. **Capture app** — http://localhost:5173 → **Use camera** (decoder is
    *optical* by default; the header button flips to *stub* = fake beacons).
-   Hold the badge chest-high facing the camera: the track row shows `4E`,
-   consent from devnet, and the face blurs (seeded `opt_out`).
-3. **The on-stage beat** — flip `4E` on-chain any of these ways and watch the
-   blur clear within the sync interval (~1 s push, ≤3 s poll):
-   - badge A button (needs the radio bridge), or `CNSR4E1` ⏎ in `npm run bridge -- --stdin`
-   - operator panel → **grant** (badge-signed + relayed by default)
-   - `cd registry && npm run badge-press -- 4E grant` (the button, from another process)
-   - `cd registry && npm run toggle -- 4E grant` (owner-signed)
-4. **Film event** — with `4E` opted out and on camera: the panel lists the
-   event, the laptop speaks (ElevenLabs, or macOS `say` labeled as fallback),
-   the **Badge radio** section shows `↓ CNSF4E`, and within 10 s the event is
-   anchored (`⛓ #n ↗` links to the transaction). `GET /audit/verify` proves
-   the log matches the chain.
+   Hold the badge **just below your chin, screen square to the camera**, with
+   the beacon ARMED (START). The three digits must be ≥ 18 px wide in the
+   processing frame; the decoder is reliable from ~32 px — roughly ≤ 1 m from
+   a laptop webcam at **1280px** (the default; 720 px halves that). A lock
+   takes two consecutive frames (~100 ms). With **overlay: on** the feed shows
+   what the decoder sees — a red box with its verdict on every candidate
+   (`mint blob, no key read (24 px)` = too small / not square to the camera),
+   green `badge 27 · OPT-IN → T1` = decoded and bound to the face above it —
+   and the **Beacons** panel says why nothing decodes. Then the track row
+   shows the id, consent from devnet, and the face blurs (opt_out). Something
+   off? **🎥 4s** records four seconds of frames to `data/diag/` and
+   `npx tsx scripts/replay.ts ../data/diag/<ts>-seq` replays the real decoder
+   over them, frame by frame.
+3. **The on-stage beat** — press **A on the badge** (any key leaves the
+   beacon; toggle, then START again). The light now carries the wearer's
+   choice: an OPT-OUT blurs the face on the very next frame (restrict-only,
+   no chain round-trip), and an OPT-IN is relayed by the camera as the badge's
+   `CNSR` request → the service signs it with the badge's key → the program
+   verifies it on-chain → the cache push clears the face, typically 2–4 s
+   after the decode, with an explorer link in **Badge radio**. No wallet, no
+   panel click. The other ways to flip a record still work: the panel's
+   **grant/revoke**, `npm run badge-press -- 3D grant` or `npm run toggle`
+   in `registry/`, or `CNSR3D1` ⏎ in `npm run bridge -- --stdin`.
+
+   **`delete record…`** on a card really deletes the on-chain record (it asks
+   first): the badge is then unregistered ⇒ always blurred until it is seen
+   again and auto-registered.
+4. **Film event → notice** — with an opted-out badge on camera (`271` on the
+   screen = Nehad, `86D` = Hashim; the two demo contacts live in
+   `data/demo/seed-consents.json`): a popup over the feed says *Nehad Shikh
+   Trab was filmed at 12:01:03 — recording on Solana…*, turns into *has been
+   notified — email sent to n•••@gmail.com* a few seconds later, and links
+   the two transactions (`⛓ filmed ↗`, `⛓ notified ↗`) plus the notice
+   account. The laptop speaks (ElevenLabs, or macOS `say` labeled as
+   fallback), the **Badge radio** section shows `↓ CNSF27`, the **Filmed &
+   notified** list in the consent panel shows the on-chain record (filmed /
+   filed / told, straight from the cache), and within 10 s the event is also
+   folded into the camera's commitment (`#n ↗`). `GET /audit/notices?badge=27`
+   reads the notices back from the chain; `GET /audit/verify` proves the
+   log matches the chain. The email itself is a **dry-run**: composed and
+   appended to `data/audit/notices.jsonl`, never sent — the on-chain notice
+   is the real artefact, and `/health` says `email dry-run`.
 5. **Smoke test without a camera** — `cd service && npm run smoke` drives
    FilmEvent → CNSF, CNSR → badge-signed relay → on-chain flip → CNSC, and
    waits for the attestation. Run it before going on stage.
@@ -138,6 +184,18 @@ the *Localnet* section below, then `scripts/dev.sh localnet`.
 - **Per-event overrides** (`set_event_override`): "blur me everywhere except
   the closing ceremony" is a second PDA keyed by `(badge, sha256(event_id))`,
   owned by the badge owner and clearable even after the record is closed.
+- **Capture notices** (`record_capture` / `record_notice`): for every
+  film-event of an opted-out badge the camera key files a `CaptureNotice`
+  PDA keyed by `(camera, sha256(FilmEvent))` — the same hash the audit log
+  stores for that entry — holding `filmed_at` (camera clock), `recorded_at`
+  and `notified_at` (chain clock) and the channels the person was told over.
+  Only the registered camera can write it, nobody can delete it, and it is
+  single-use: "told" cannot be re-dated. It is the person's evidence that a
+  camera saw them without consent *and* that they were told, and it carries no
+  name, email or image — the badge id is the only key, the organizer's
+  directory (off-chain) turns it into a person. The constant-cadence
+  commitment stream still covers the whole log; the notice is the per-person
+  receipt for the one case where a receipt is owed.
 - **Delete** (`close_consent`): rent back to the owner; absence ⇒ fail-safe blur.
 
 Program id (devnet + localnet): `UKoViTT9288nMeBzjeMoHBBmxHfXvbg6F1gF6pjiSW7`.
@@ -195,7 +253,10 @@ npm install && npm run dev            # http://localhost:8787/health
 # terminal 2 — capture app
 cd capture-app && npm install && npm run setup && npm run dev   # http://localhost:5173
 
-# terminal 3 (optional) — badge radio bridge, or your keyboard standing in for it
+# terminal 3 — vision sidecar: YOLOv8x-face + the badge digit model on the laptop GPU (Apple MPS)
+cd vision && ./setup.sh && .venv/bin/python server.py           # ws://127.0.0.1:8765; the app falls back to in-browser BlazeFace + the classical decoder when this is down
+
+# terminal 4 (optional) — badge radio bridge, or your keyboard standing in for it
 cd service && npm run bridge -- --port /dev/cu.usbserial-XXXX     # ESP32 dev board
 cd service && npm run bridge -- --stdin                            # type CNSR4E1 ⏎ = badge A button
 ```
@@ -225,7 +286,16 @@ npm run watch                              # tail events from a second terminal
 Audit: `GET http://localhost:8787/audit/verify` recomputes the local hash
 chain from raw fields and compares it to the on-chain head (reports
 `mismatches` and `unanchored`). `GET /audit/events?badge=4E` (bearer token
-if `SERVICE_TOKEN` is set) feeds the "who filmed me?" layer.
+if `SERVICE_TOKEN` is set) feeds the "who filmed me?" layer, and
+`GET /audit/notices?badge=4E` returns the camera's on-chain notices for that
+badge (filmed_at / notified_at / channels, one `getProgramAccounts`).
+One camera key per running service: a second laptop attesting with a copy of
+the same `keys/camera-cam-1.json` forks the two local logs from the chain
+(`/audit/verify` reports it on both). Give that machine its own camera
+(delete its `keys/camera-cam-1.json`, re-run `npm run seed` there), then
+`npm run rebuild-audit` in `service/` re-derives this log's batch list from
+the chain's own `CaptureAttested` events (keeps every local film-event; the
+old file is kept as `.bak`).
 
 ### Flags
 
@@ -236,7 +306,10 @@ no-network fallback), `SOLANA_CLUSTER` (the RPC URL follows unless
 `CONSENT_CACHE_SYNC_MS`, `CONSENT_STALE_MS`, `EVENT_ID`, `FILM_EVENT_ENDPOINT`,
 `SERVICE_TOKEN`, `SERVICE_WS_URL`, `DEFAULT_CONSENT = blur`.
 Service flags: `service/.env.example` (`SERVICE_TOKEN`, `CORS_ORIGIN`,
-`ATTEST_INTERVAL_MS`, `ATTEST_HEARTBEAT`, `BADGE_KEYS_DIR`, `RADIO_SYNC_MS`, …).
+`ATTEST_INTERVAL_MS`, `ATTEST_HEARTBEAT`, `BADGE_KEYS_DIR`, `RADIO_SYNC_MS`,
+`NOTIFY_ON_CHAIN`, `CONTACTS_FILE`, `NOTICE_LOG`, `NOTICE_MIN_INTERVAL_MS` — one
+on-chain notice per badge per minute; a badge that stays in frame keeps firing
+film-events for the alarm, and they are covered by that notice, …).
 
 ### Judge Q&A (built in, not just pitched)
 
@@ -246,14 +319,43 @@ Service flags: `service/.env.example` (`SERVICE_TOKEN`, `CORS_ORIGIN`,
 | Badge occluded / out of frame? | Fail-safe: blur on uncertainty, plus a tracker that persists the blur. |
 | Why blockchain? | Consent is user-owned and revocable on-chain, enforcement is tied to that record, and the live revoke→blur-flip proves it. The audit log is hash-anchored so it can't be quietly edited, and the anchoring cadence is constant so the chain reveals nothing about captures. |
 | Who can register a badge? | Only the organizer (`Registry.issuer`), once per badge id — it hands out the physical badge anyway. After that only the badge's key matters. |
+| The light carries OPT-IN now — so why the chain? | The light is restrict-only: it can blur you instantly but can never clear you. Clearing needs the on-chain record, which only the badge's key can change; the camera merely relays the badge's request. A replayed "OPT-IN" light therefore cannot un-blur anyone. |
+| Do I have to register every badge by hand? | No. A badge seen for the first time is auto-registered as `opt_out` by the organizer service (`AUTO_REGISTER`), which can never un-blur anyone. The seed file just gives the demo badges labels and initial states. |
 | Can I spoof a badge id? | The chain authenticates `badge_id → consent`, not the emitter of a blink. A replayed opt-in beacon held next to a bystander can un-blur them; a replayed opt-out can force a blur. That is the light channel's limit, stated up front; the upgrade is a rolling code (`badge_id ‖ counter`, HMAC-truncated) or the badge-signed BLE payload we already verify on-chain. |
 | Does the badge need SOL / a wallet? | No. Its A button sends a radio request; the badge's key signs a 49-byte message; a relayer pays; the program verifies the signature, nonce, instance and deadline. |
 | The badge has no Wi-Fi — how does it talk to the chain? | Light up (id only) and BLE radio down/up through a bridge. The service is the badge's registry client: it turns `CNSR` into the signed update and mirrors every on-chain change back as `CNSC`. |
 | Doesn't the operator hold everyone's keys in the demo? | Only because the firmware isn't signing yet — see the honesty note above; `badge-press` from another process shows the same path, and a wallet that owns a record signs for itself. |
 | Default for someone with no badge? | Blur. |
+| How does someone who opted out know they were filmed? | The camera files it on-chain (`record_capture`: badge id + when), the service tells them (badge alarm, voice, email — a dry-run in the demo) and files that too (`record_notice`: when + how). The record is theirs to point at; it names no one. |
+
+## Thru (Unto Labs) — the evidence ledger
+
+Two chains, two jobs. **Solana** holds *authorization*: who consents — rare,
+owner-signed, revocable (the Anchor registry above). **Thru** holds *evidence*:
+what the camera did — frequent and append-only. Batching evidence to a slow
+chain every 10 s means the record lags reality, so on Thru the service commits
+**every film-event and every attestation checkpoint the moment it happens**,
+each as its own Alphanet account (`thru uploader upload`, ~3 s), readable by
+anyone on `scan.thru.org`. The checkpoint commit carries the Solana signature,
+so the two ledgers cross-reference. Nothing visual is ever stored — the same
+ids, hashes and timestamps the Solana attestation already carries.
+
+Setup (once, on the demo laptop):
+
+```bash
+npm i -g thru
+thru keys generate consentinel && thru account create consentinel
+thru faucet withdraw consentinel 5000 --fee-payer consentinel
+```
+
+`service/src/thru.ts` auto-disables (and says why on startup) if the CLI or
+funds are missing, so the hero path never depends on it. In the operator panel
+each capture gets a **Thru ↗** link and the **Evidence ledger** section streams
+commits. Alphanet is a developer network and this integration was written
+during the event; the fee-payer key is a throwaway.
 
 ## Licenses / credits
 
-MediaPipe (Apache-2.0), Anchor (Apache-2.0), `@solana/web3.js` (MIT),
+MediaPipe (Apache-2.0), Ultralytics YOLOv8 (AGPL-3.0) and the lindevs YOLOv8-Face weights (WIDER FACE), Anchor (Apache-2.0), `@solana/web3.js` (MIT),
 `@noble/hashes` (MIT), `tweetnacl` (Unlicense), `ws` (MIT), React (MIT), Vite (MIT).
 ElevenLabs API for the spoken alerts.

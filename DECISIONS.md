@@ -236,7 +236,24 @@ means cutting something. First candidate: MODE S, once MODE P decoding is proven
 
 ---
 
-## 8. Constraints that are not up for debate
+## 8. Notices: "you were filmed" is a receipt, and it lives on-chain
+
+Decided Sun 2026-09-20 05:00 ET. An opted-out person on camera gets told
+(badge alarm, voice, email — the email transport is a dry-run for the demo),
+and the camera files two facts on Solana per film-event: `record_capture`
+(when they were filmed, camera clock + chain clock) and `record_notice` (when
+and how they were told, chain clock). One PDA per event, keyed by the
+event's audit hash, writable only by the registered camera, never deletable,
+"told" single-use.
+
+Trade-off, stated plainly: the 10 s commitment stream was designed so the
+public chain says nothing about *when* anyone was filmed. Notices give that
+up for opted-out captures, on purpose — the badge id (not a name) and two
+timestamps are the evidence the person needs, and a receipt nobody can see is
+not a receipt. Names and emails stay in the organizer's off-chain directory
+(`contact` in `data/demo/seed-consents.json`), never on-chain.
+
+## 9. Constraints that are not up for debate
 
 - No face recognition, anywhere.
 - No biometric database.

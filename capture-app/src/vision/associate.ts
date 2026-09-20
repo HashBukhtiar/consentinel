@@ -30,7 +30,8 @@ export function associate(tracks: Track[], beacons: BeaconReading[], nowMs: numb
       const cy = t.bbox.y + t.bbox.h / 2;
       if (cy > b.imagePosition.y) continue; // face must be above the badge
       const dx = cx - b.imagePosition.x, dy = cy - b.imagePosition.y;
-      const d = Math.sqrt(dx * dx + dy * dy);
+      if (Math.abs(dx) > t.bbox.h * flags.BIND_MAX_DX_FACE_HEIGHTS) continue; // beside the badge, not above it: someone leaning in
+      const d = Math.sqrt((dx * flags.BIND_DX_WEIGHT) ** 2 + dy * dy); // sideways offset counts triple
       if (d > t.bbox.h * flags.BIND_MAX_FACE_HEIGHTS) continue; // not plausibly this face's badge
       cands.push({ t, d });
     }
@@ -52,7 +53,12 @@ export function associate(tracks: Track[], beacons: BeaconReading[], nowMs: numb
     if (usedBeacon.has(p.b) || usedTrack.has(p.t)) continue;
     usedBeacon.add(p.b);
     usedTrack.add(p.t);
+    // one badge, one person: a stale binding of this id on another face (the
+    // wearer looked down for a moment and the badge briefly bound to whoever
+    // was left) is released now, not when its TTL runs out
+    for (const t of tracks) if (t !== p.t && t.beaconId === p.b.beaconId) { delete t.beaconId; delete t.boundAtMs; delete t.beaconOptIn; }
     p.t.beaconId = p.b.beaconId;
     p.t.boundAtMs = nowMs;
+    p.t.beaconOptIn = p.b.optIn; // what the wearer's badge says; restrict-only in decide()
   }
 }

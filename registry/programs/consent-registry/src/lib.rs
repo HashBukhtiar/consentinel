@@ -14,8 +14,12 @@
 //!
 //! Privacy by construction (§4.2 of the spec): nothing visual ever lands here.
 //! On-chain state is limited to badge id, owner pubkey, consent flags,
-//! timestamps, and a rolling hash that commits to the *off-chain* film-event
-//! log for tamper-evidence. No faces, no images, no "who was where" feed.
+//! timestamps, a rolling hash that commits to the *off-chain* film-event log
+//! for tamper-evidence, and — for captures of people who had opted OUT — a
+//! `CaptureNotice` per film-event: when the camera saw the badge, when that
+//! was recorded, and when the person was told. No faces, no images, no names,
+//! no contact details: the badge id is the only key, and the organizer's
+//! off-chain directory is what turns it into a person.
 //!
 //! Instructions
 //! - `initialize`               create the singleton `Registry` (issuer = organizer)
@@ -37,6 +41,11 @@
 //! - `register_camera`          a capture pipeline registers its audit log
 //! - `attest_capture`           fold a commitment into the camera's rolling
 //!                              hash chain (`head = H(head || commitment)`)
+//! - `record_capture`           the camera files a notice that an opted-out
+//!                              badge was on camera (one PDA per film-event,
+//!                              keyed by the event's audit hash)
+//! - `record_notice`            …and that the person was told, with the
+//!                              chain clock as the timestamp (single-use)
 #![allow(clippy::result_large_err)]
 #![allow(unexpected_cfgs)]
 
@@ -62,6 +71,13 @@ pub const REGISTRY_SEED: &[u8] = b"registry";
 pub const CONSENT_SEED: &[u8] = b"consent";
 pub const OVERRIDE_SEED: &[u8] = b"override";
 pub const CAMERA_SEED: &[u8] = b"camera";
+pub const CAPTURE_SEED: &[u8] = b"capture";
+/// A camera's `filmed_at` may run ahead of the chain clock by at most this (clock skew).
+pub const MAX_CAPTURE_SKEW_SECS: i64 = 5 * 60;
+/// `CaptureNotice.channels` bits: how the person was told.
+pub const CHANNEL_EMAIL: u8 = 1;
+pub const CHANNEL_BADGE_RADIO: u8 = 2;
+pub const CHANNEL_VOICE: u8 = 4;
 
 #[program]
 pub mod consent_registry {
@@ -241,6 +257,65 @@ pub mod consent_registry {
             commitment,
             head: cam.head,
             at: now,
+        });
+        Ok(())
+    }
+
+    /// The camera files a notice: an opted-out badge was on camera. One
+    /// `CaptureNotice` per film-event, keyed by the event's sha256 — the same
+    /// hash the off-chain audit log stores for that entry and the rolling
+    /// commitment covers, so the notice and the log entry name each other.
+    /// `filmed_at` is the camera's clock at capture; `recorded_at` is the
+    /// chain's. Only the camera's authority (a registered `CameraLog`) can
+    /// write one, and it pays the rent: the record is the person's evidence,
+    /// so nobody but the camera can create it and nobody can delete it.
+    pub fn record_capture(
+        ctx: Context<RecordCapture>,
+        badge_id: u16,
+        event_hash: [u8; 32],
+        filmed_at: i64,
+    ) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        require!(
+            filmed_at > 0 && filmed_at <= now + MAX_CAPTURE_SKEW_SECS,
+            ConsentError::BadTimestamp
+        );
+        let n = &mut ctx.accounts.notice;
+        n.badge_id = badge_id;
+        n.camera = ctx.accounts.authority.key();
+        n.event_hash = event_hash;
+        n.filmed_at = filmed_at;
+        n.recorded_at = now;
+        n.notified_at = 0;
+        n.channels = 0;
+        n.bump = ctx.bumps.notice;
+        emit!(CaptureRecorded {
+            badge_id,
+            camera: n.camera,
+            event_hash,
+            filmed_at,
+            recorded_at: now,
+        });
+        Ok(())
+    }
+
+    /// The person behind the badge was told (`channels` = which ways, see
+    /// `CHANNEL_*`). Stamps the notice with the chain clock. Single-use: a
+    /// notice is either pending or delivered, and "delivered" cannot be
+    /// re-dated.
+    pub fn record_notice(ctx: Context<RecordNotice>, channels: u8) -> Result<()> {
+        require!(channels != 0, ConsentError::NoChannel);
+        let now = Clock::get()?.unix_timestamp;
+        let n = &mut ctx.accounts.notice;
+        require!(n.notified_at == 0, ConsentError::AlreadyNotified);
+        n.notified_at = now;
+        n.channels = channels;
+        emit!(NoticeRecorded {
+            badge_id: n.badge_id,
+            camera: n.camera,
+            event_hash: n.event_hash,
+            notified_at: now,
+            channels,
         });
         Ok(())
     }
@@ -526,6 +601,41 @@ pub struct AttestCapture<'info> {
     pub authority: Signer<'info>,
 }
 
+#[derive(Accounts)]
+#[instruction(badge_id: u16, event_hash: [u8; 32])]
+pub struct RecordCapture<'info> {
+    /// The camera must be registered; its authority signs and pays.
+    #[account(
+        seeds = [CAMERA_SEED, authority.key().as_ref()],
+        bump = camera.bump,
+        has_one = authority @ ConsentError::Unauthorized,
+    )]
+    pub camera: Account<'info, CameraLog>,
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + CaptureNotice::INIT_SPACE,
+        seeds = [CAPTURE_SEED, authority.key().as_ref(), &event_hash],
+        bump,
+    )]
+    pub notice: Account<'info, CaptureNotice>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RecordNotice<'info> {
+    #[account(
+        mut,
+        seeds = [CAPTURE_SEED, authority.key().as_ref(), &notice.event_hash],
+        bump = notice.bump,
+        constraint = notice.camera == authority.key() @ ConsentError::Unauthorized,
+    )]
+    pub notice: Account<'info, CaptureNotice>,
+    pub authority: Signer<'info>,
+}
+
 // ---------------------------------------------------------------------------
 // state
 
@@ -588,6 +698,28 @@ pub struct CameraLog {
     pub bump: u8,
 }
 
+/// One per film-event of an opted-out badge. PDA seeds:
+/// `["capture", camera authority, event_hash]`.
+#[account]
+#[derive(InitSpace)]
+pub struct CaptureNotice {
+    /// The badge that was on camera.
+    pub badge_id: u16,
+    /// The camera authority that filed it (a registered `CameraLog`).
+    pub camera: Pubkey,
+    /// sha256 of the canonical FilmEvent — the off-chain audit entry this is about.
+    pub event_hash: [u8; 32],
+    /// The camera's clock at capture (unix seconds).
+    pub filmed_at: i64,
+    /// Chain clock when the capture was filed here.
+    pub recorded_at: i64,
+    /// Chain clock when the person was told; 0 while pending.
+    pub notified_at: i64,
+    /// How they were told (`CHANNEL_*` bits); 0 while pending.
+    pub channels: u8,
+    pub bump: u8,
+}
+
 // ---------------------------------------------------------------------------
 // events
 
@@ -628,6 +760,24 @@ pub struct CaptureAttested {
     pub at: i64,
 }
 
+#[event]
+pub struct CaptureRecorded {
+    pub badge_id: u16,
+    pub camera: Pubkey,
+    pub event_hash: [u8; 32],
+    pub filmed_at: i64,
+    pub recorded_at: i64,
+}
+
+#[event]
+pub struct NoticeRecorded {
+    pub badge_id: u16,
+    pub camera: Pubkey,
+    pub event_hash: [u8; 32],
+    pub notified_at: i64,
+    pub channels: u8,
+}
+
 // ---------------------------------------------------------------------------
 // errors
 
@@ -657,4 +807,10 @@ pub enum ConsentError {
     Overflow,
     #[msg("Expected the Instructions sysvar")]
     BadSysvar,
+    #[msg("filmed_at must be a past unix time (at most 5 minutes ahead of the chain clock)")]
+    BadTimestamp,
+    #[msg("channels must name at least one notification channel")]
+    NoChannel,
+    #[msg("This capture notice has already been marked as delivered")]
+    AlreadyNotified,
 }

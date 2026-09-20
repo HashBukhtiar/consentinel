@@ -4,13 +4,39 @@
 // the render loop.
 import { flags } from "../config/flags";
 
+/**
+ * The notice path for one film-event, as the service reports it at every
+ * stage: filed on-chain (record_capture), the person told (email dry-run +
+ * whatever else reached them), told on-chain (record_notice). Names and the
+ * masked email come from the organizer's off-chain directory, never the chain.
+ */
+export interface NoticeMsg {
+  type: "notice";
+  at: number;
+  stage: "queued" | "recorded" | "notified" | "unreachable" | "coalesced" | "error";
+  eventId: string;
+  beaconId: string;
+  eventHash: string;
+  cameraId: string;
+  filmedAt: number; // ms, camera clock
+  person: { name: string; email?: string } | null; // email masked
+  capture?: { signature: string; explorer: string; address: string; addressExplorer: string; recordedAt: number }; // unix s, chain clock
+  notice?: { signature: string; explorer: string; notifiedAt: number; channels: string[] }; // unix s, chain clock
+  email?: { to: string; subject: string; mode: string; at: number };
+  /** `coalesced`: covered by the notice filed for that earlier film-event of the same badge */
+  coveredBy?: { eventId: string; at: number };
+  error?: string;
+}
+
 export type OperatorMessage =
   | { type: "health"; [k: string]: unknown }
+  | NoticeMsg
   | { type: "film-event"; entry: { eventId: string; beaconId: string; seq: number; hash: string }; delivery: { delivered: number; queued: boolean } }
   | { type: "alert"; beaconId: string; eventId: string; text: string; provider: string; audioUrl?: string; cached: boolean; playedLocally?: boolean }
   | { type: "alert-error"; beaconId: string; error: string }
   | { type: "attested"; batch: number; eventIds: string[]; beaconIds: string[]; heartbeat: boolean; signature: string; head: string; count: number; explorer: string | null }
   | { type: "delegated"; signature: string; explorer: string; consent: boolean; revision: number }
+  | { type: "thru"; kind: "film-event" | "attest"; eventId?: string; batch?: number; seed: string; account: string; explorer: string; ms: number }
   // badge radio (A ↔ C): CNSF/CNSC frames going down to the badge, CNSR requests coming up
   | { type: "radio"; at: number; dir: "down" | "up"; frame: string; transport: string; delivered?: number; queued?: boolean; outcome?: RadioOutcome }
   | { type: "bridge"; connected: number; at: number };

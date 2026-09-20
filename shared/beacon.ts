@@ -2,360 +2,368 @@
  * Consentinel optical beacon — shared wire format.
  *
  * This file is the contract between the badge transmitter
- * (`firmware/consentinel-beacon.lua`) and the capture app's decoder. The badge
- * paints the light; nothing on the camera side ever reads the Lua. If you
- * change a constant here, change it there in the same commit.
+ * (`firmware/consentinel-beacon.lua`) and the capture app's decoder.
+ * If you change a constant here, change it there in the same commit. A
+ * one-value disagreement does not degrade gracefully: every frame fails CRC
+ * and every face stays blurred forever.
  *
- * FORMAT: one STATIC frame — a black screen carrying the 3-digit KEY as three
- * 7-segment hex digits. No blinking, no clock recovery, no multi-frame
- * assembly: a single exposure decodes.
+ * WHAT CHANGED (v2, full-screen colour blink). v1 was a 304x132 patch with a
+ * 3x2 grid of lit/dark cells, 12 bits carried in parallel across 3 symbols.
+ * Measured, it died at 22 px of patch width — not because the localizer lost
+ * the patch (it found it down to 13 px) but because at 22 px each cell is ~7
+ * processed pixels and blur crosstalk between neighbouring cells destroys the
+ * bits. Space ran out before time did.
  *
- *   +----------------------------------------+
- *   |    ###      ###                        |   SHAPE  = identity
- *   |      #        #      #                 |   COLOUR = consent
- *   |    ###      ###                        |
- *   |   #            #     #                 |   GREEN = opt-in
- *   |    ###      ###                        |   RED   = opt-out
- *   +----------------------------------------+
+ * v2 spends the whole screen on ONE symbol and pays for the bits in TIME:
  *
- * Shape and colour are independent channels, so a decoder that reads one
- * badly cannot corrupt the other. Digits 1-2 are the id, digit 3 is the CRC-4
- * check digit.
+ *   - the patch is the entire 320x240 screen, so the interior is one giant
+ *     uniform blob and cell crosstalk cannot exist;
+ *   - each symbol is one of 5 COLOURS, not one of 2 brightnesses, so a symbol
+ *     carries 2 bits instead of 1 without asking the camera to resolve any
+ *     extra spatial structure (measured 2.7x faster than mono for the same
+ *     payload, at the same range);
+ *   - symbols are DIFFERENTIAL (each colour encodes the step to the next), so
+ *     consecutive symbols can never be equal and the decoder gets a guaranteed
+ *     transition at every symbol boundary — no clock lane, no Manchester, no
+ *     clock recovery at all;
+ *   - two colours outside the data ring mark the start of a frame AND carry
+ *     consent, so framing is unambiguous and a printed photo of a badge (which
+ *     shows one static colour forever) can never assemble a frame.
  *
- * The COLOUR is RESTRICT-ONLY: a face clears only when the chain record says
- * opt-in AND the light says opt-in. Green light against an opt-out chain
- * record loses — the light can restrict, never grant.
- *
- * Three independent checks run before an id is trusted: every segment must
- * resolve lit/unlit, each digit's 7 bits must be one of 16 valid glyphs
- * (112 of 128 patterns are rejected), and the 12-bit payload must pass CRC.
- * Any of them failing means BLUR — never guess.
- *
- * LOCALIZATION NOTE: there is no white ring any more. The patch is found as a
- * cluster of saturated red OR green strokes on a dark field, and the
- * brightness reference is the strongest stroke in that cluster — see
- * `decodeFrame`, which is self-calibrating and needs no external reference.
+ * The beacon now carries identity AND consent. The consent bit is
+ * RESTRICT-ONLY in the capture app: clear requires chain-opt_in AND
+ * light-opt_in (see capture-app/src/consent/decide.ts). Light can subtract
+ * permission, never add it, so a spoofed or misread beacon can only ever BLUR
+ * someone — which is why it is safe to trust a 16-bit unsigned payload at all.
  */
-
-/** Lua's `//`. Every derived constant below floors exactly like the badge. */
-const idiv = (a: number, b: number) => Math.floor(a / b);
 
 // ----------------------------------------------------------------- geometry
 
 /**
- * The physical ST7789 panel. Verified on hardware with
- * `firmware/screen-ruler.lua`: the app's root container carries 30px of
- * padding, so the badge offsets its outermost box by (-30,-30) to reach screen
- * (0,0). That offset is a badge-side concern — the camera only sees the panel.
+ * Patch position and size on the badge's 320x240 screen: the WHOLE screen.
+ *
+ * The beacon screen has zero text by design. At 60 degrees FOV and
+ * PROCESS_WIDTH 1280, one processed pixel is ~0.9 mm at 1 m, so the whole
+ * 35 mm display is ~39 processed pixels wide and a 24 px label would be ~2.8
+ * of them tall. Text is for the wearer at arm's length; the camera gets
+ * geometry and colour.
  */
-export const PANEL = { w: 320, h: 240 } as const;
+export const PATCH = { x: 0, y: 0, w: 320, h: 240 } as const;
 
 /**
- * The beacon rectangle, and the ONE knob. MUST match PATCH_W/PATCH_H in
- * firmware/consentinel-beacon.lua.
+ * Always-lit white frame around the interior. It does two jobs and both are
+ * load-bearing:
+ *
+ *   1. LOCALIZATION ANCHOR. During a BLACK symbol the ring is the only lit
+ *      thing on the badge, so the connected-component scan finds the ring or
+ *      it finds nothing.
+ *   2. WHITE REFERENCE. Every term of beaconFeature() divides the interior by
+ *      this ring, which is what makes the classifier immune to exposure and
+ *      white balance (measured: residual drift is 6% of the palette spacing,
+ *      versus 158% for raw RGB — exposure alone moves a raw colour past its
+ *      neighbour).
+ *
+ * Measured on full-screen geometry, each +4 px of border buys ~+0.17 m of
+ * range at 60 degrees FOV for ~5% of interior area, with no saturation before
+ * 32 px. Interior area is free now (it is one blob, not six cells), so the
+ * border is sized for range rather than for bits; 24 px is the value-for-money
+ * point at 68% interior.
+ *
+ * MUST match BORDER in firmware/consentinel-beacon.lua.
  */
-export const PATCH_W = 320;
-export const PATCH_H = 240;
+export const BORDER_PX = 24;
 
-export const PATCH = {
-  x: idiv(PANEL.w - PATCH_W, 2),
-  y: idiv(PANEL.h - PATCH_H, 2),
-  w: PATCH_W,
-  h: PATCH_H,
+/** The blinking interior, in badge pixels. 272x192 = 52 224 px. */
+export const INTERIOR = {
+  x: BORDER_PX, y: BORDER_PX,
+  w: PATCH.w - 2 * BORDER_PX, h: PATCH.h - 2 * BORDER_PX,
 } as const;
 
-export const PATCH_ASPECT = PATCH.w / PATCH.h; // 1.333
-
 /**
- * Margin keeping strokes off the bezel, where glare and viewing angle eat them
- * first. Everything inside it is digits — no frame, no stripe.
- * MUST match MARGIN in the Lua.
+ * Fraction of the interior the decoder actually averages, centred. 40% linear
+ * (16% of the area) keeps the sample clear of the border even after a box
+ * blur of r=4 at 30 px patch width, where the border is ~2.3 camera pixels and
+ * bleeds inward by about that much.
  */
-export const MARGIN = idiv(PATCH_W, 20); // 16
-export const CX = PATCH.x + MARGIN; // 16
-export const CY = PATCH.y + MARGIN; // 16
-export const CW = PATCH_W - 2 * MARGIN; // 288
-export const CH = PATCH_H - 2 * MARGIN; // 208
+export const SAMPLE_FRAC = 0.4;
 
-// ------------------------------------------------------------ digit layout
+// ------------------------------------------------------------------ palette
 
-export const D_N = 3;
-export const D_GAP = idiv(CW, 24); // 12
-export const D_W = idiv(CW - (D_N - 1) * D_GAP, D_N); // 88
-export const D_H = CH; // 208
-/** Stroke width. THE range-limiting feature: 22px = 6.9% of patch width. */
-export const D_T = idiv(D_W, 4); // 22
-export const D_HALF = idiv(D_H - 3 * D_T, 2); // 71
-export const D_X = CX + idiv(CW - (D_N * D_W + (D_N - 1) * D_GAP), 2); // 16
-export const D_Y = CY; // 16
+export type RGB = readonly [number, number, number];
 
 /**
- * Segment bits, LSB first:
+ * The five DATA colours, in symbol-index order 0..4.
  *
- *      --- a(1) ---
- *     |            |
- *   f(32)        b(2)
- *     |            |
- *      --- g(64) --
- *     |            |
- *   e(16)        c(4)
- *     |            |
- *      --- d(8) ---
+ * Every entry is an exact RGB565 value, so the panel shows precisely what we
+ * asked for and the decoder's reference table is the truth rather than an
+ * approximation. (R and B have only 32 exact 8-bit levels, G has 64.)
  *
- * Index is the nibble value. MUST match SEG in the Lua.
+ * These are the HALF-LEVEL hues, not the cube corners, and that is deliberate:
+ * in chromaticity the R/G/B primaries sit twice as far from neutral as the
+ * Y/C/M secondaries, so a corner palette is lopsided and the secondaries are
+ * the first thing to die under desaturation. Measured symbol error for this
+ * family is 0.00% down to 16 px with the margin reject on.
+ *
+ * Note there is NO WHITE here. The interior can never match the border, so a
+ * solid white rectangle in the room is never a valid symbol and localization
+ * stays unambiguous.
+ *
+ *   0 BLACK  #000000      3 AMBER  #FF8200
+ *   1 AZURE  #0082FF      4 BLUE   #0000FF
+ *   2 LIME   #84FF00
  */
-export const SEG = [
-  0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, // 0 1 2 3 4 5 6 7
-  0x7f, 0x6f, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71, // 8 9 A b C d E F
-] as const;
+export const DATA_COLORS: readonly RGB[] = [
+  [0x00, 0x00, 0x00], // 0 BLACK
+  [0x00, 0x82, 0xff], // 1 AZURE
+  [0x84, 0xff, 0x00], // 2 LIME
+  [0xff, 0x82, 0x00], // 3 AMBER
+  [0x00, 0x00, 0xff], // 4 BLUE
+];
 
-/** Reverse lookup: 7-bit pattern -> nibble, or undefined if not a glyph. */
-const GLYPH = new Map<number, number>(SEG.map((bits, n) => [bits, n]));
+/** Size of the differential ring. The data alphabet is exactly DATA_COLORS. */
+export const RADIX = 5;
 
 /**
- * Rect of segment s (0..6) for a digit whose top-left is (x, y), in badge
- * pixels. The vertical budget is exactly 3*D_T + 2*D_HALF = D_H, so nothing
- * rounds off the bottom. MUST match seg_geom in the Lua.
+ * The two FRAME MARKERS. They live outside the differential ring, so seeing
+ * one is unambiguously "a frame starts here" — the decoder needs no clock, no
+ * preamble correlation and no symbol counter to re-acquire.
+ *
+ * They also ARE the consent bit, duplicated from payload bit 7. Two reasons:
+ *
+ *   - consent then reads on the FIRST camera frame that resolves a colour, not
+ *     900 ms later when a frame completes, which is what makes "press A and be
+ *     blurred by the next frame" true rather than aspirational;
+ *   - marker and payload must agree or decodeFrame() returns null, so a
+ *     corruption that flips consent has to flip it in two places at once.
+ *
+ * MINT and ROSE are the widest-separated pair in the whole alphabet (1.4366 in
+ * feature space) and differ in both chroma and luma, so they are the last
+ * thing to become confusable off-axis — and a human across the room can read
+ * green-vs-pink with no decoding at all (locked decision 6).
  */
-export function segRect(s: number, x: number, y: number) {
-  const mid = y + D_T + D_HALF;
-  switch (s) {
-    case 0: return { x: x + D_T, y, w: D_W - 2 * D_T, h: D_T };                // a
-    case 1: return { x: x + D_W - D_T, y: y + D_T, w: D_T, h: D_HALF };        // b
-    case 2: return { x: x + D_W - D_T, y: mid + D_T, w: D_T, h: D_HALF };      // c
-    case 3: return { x: x + D_T, y: y + D_H - D_T, w: D_W - 2 * D_T, h: D_T }; // d
-    case 4: return { x, y: mid + D_T, w: D_T, h: D_HALF };                     // e
-    case 5: return { x, y: y + D_T, w: D_T, h: D_HALF };                       // f
-    default: return { x: x + D_T, y: mid, w: D_W - 2 * D_T, h: D_T };          // g
+export const MARK_OPT_IN: RGB = [0x00, 0xff, 0x84]; // MINT
+export const MARK_OPT_OUT: RGB = [0xff, 0x00, 0x84]; // ROSE
+export const MARK_IN_INDEX = 5;
+export const MARK_OUT_INDEX = 6;
+
+/** Full 7-entry alphabet: data ring 0..4, then the two markers. */
+export const ALPHABET: readonly RGB[] = [...DATA_COLORS, MARK_OPT_IN, MARK_OPT_OUT];
+
+/** Human-readable names, index-aligned with ALPHABET (for tune.html + logs). */
+export const ALPHABET_NAMES = ["BLACK", "AZURE", "LIME", "AMBER", "BLUE", "MINT", "ROSE"] as const;
+
+// --------------------------------------------------------------- classifier
+
+/**
+ * Weight on the two chromaticity axes versus relative luma. Chromaticity alone
+ * is perfectly exposure- and AWB-invariant but throws luma away, which
+ * collapses black, grey and white onto the same point (measured 46-50% symbol
+ * error with a luma-free classifier). Luma alone is what the v1 decoder used
+ * and it is destroyed by border bleed at small widths. 1.6 is the measured
+ * balance between the two failure modes.
+ */
+export const KC = 1.6;
+
+/**
+ * Added to each normalized channel before the chromaticity divide. A nearly
+ * black patch has a NEUTRAL chroma, not an undefined one: without this, 8-bit
+ * quantization noise on a value of 2 swings the hue across the whole gamut.
+ */
+export const EPS = 0.03;
+
+/**
+ * Reject threshold: a symbol counts only if the nearest reference is this many
+ * times closer than the runner-up. Measured cost 2-3% of reads at 40-120 px,
+ * 5% at 30 px, 11% at 22 px. Measured benefit: it takes the wrong-id rate to
+ * ZERO at every width from 12 to 80 px over 500 000 frames per cell. This is
+ * the default-deny rule for the symbol layer — below the threshold there is no
+ * symbol, and no symbol kills the frame in progress rather than guessing it.
+ */
+export const SYMBOL_MARGIN = 1.3;
+
+/**
+ * A reference this dark is not a lit white border, so nothing sampled against
+ * it means anything. Physically unreachable in a working read (the decoder's
+ * flags.BEACON_MIN_BORDER gate sits at 80 and is the real tunable), but the
+ * classifier must be safe standing alone: with a pure-black "reference",
+ * max(1, ref) makes a pure-black interior land exactly on the BLACK reference
+ * with infinite margin, and a dark frame would hand out a free symbol.
+ */
+export const MIN_REF_LUMA = 32;
+
+/** Rec.601 luma of an RGB triple. */
+export function lumaOf(c: RGB): number {
+  return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+}
+
+/**
+ * Feature: per-channel white-balance against the border ring, then chroma and
+ * luma. Both arguments must come from the SAME camera frame — the whole point
+ * is that whatever the sensor did to the interior it also did to the ring.
+ */
+export function beaconFeature(px: RGB, ref: RGB): [number, number, number] {
+  const rn = px[0] / Math.max(1, ref[0]) + EPS;
+  const gn = px[1] / Math.max(1, ref[1]) + EPS;
+  const bn = px[2] / Math.max(1, ref[2]) + EPS;
+  const s = Math.max(1e-6, rn + gn + bn);
+  return [KC * (rn / s), KC * (gn / s), 0.299 * rn + 0.587 * gn + 0.114 * bn];
+}
+
+/** Each alphabet colour as an ideal camera would read it against pure white. */
+export const ALPHABET_REFS: readonly [number, number, number][] =
+  ALPHABET.map((c) => beaconFeature(c, [255, 255, 255]));
+
+/**
+ * Nearest alphabet entry, or null when it is not CLEARLY nearest.
+ *
+ * A UNIFORM BLOB — a laptop screen, a lamp, a sheet of paper, a photograph of
+ * a badge — normalizes to the same point whatever its colour, because px and
+ * ref are then identical. That point sits 1.14x from LIME and 1.14x from
+ * AMBER, well under the 1.30 threshold, so uniform blobs reject STRUCTURALLY
+ * rather than by a tuned brightness rule. This is what replaced v1's `anyDark`
+ * check, which a one-cell interior can no longer satisfy.
+ */
+export function classifySymbol(px: RGB, ref: RGB, margin: number): number | null {
+  if (lumaOf(ref) < MIN_REF_LUMA) return null;
+  const f = beaconFeature(px, ref);
+  let best = -1, d1 = Infinity, d2 = Infinity;
+  for (let i = 0; i < ALPHABET_REFS.length; i++) {
+    const dr = f[0] - ALPHABET_REFS[i][0];
+    const dg = f[1] - ALPHABET_REFS[i][1];
+    const dl = f[2] - ALPHABET_REFS[i][2];
+    const d = Math.sqrt(dr * dr + dg * dg + dl * dl);
+    if (d < d1) { d2 = d1; d1 = d; best = i; } else if (d < d2) { d2 = d; }
   }
-}
-
-/** Top-left of digit d (0 = most significant), in badge pixels. */
-export const digitOrigin = (d: number) => ({ x: D_X + d * (D_W + D_GAP), y: D_Y });
-
-/** Rect of segment s of digit d, as fractions of the whole patch bbox. */
-export function segRectFrac(d: number, s: number) {
-  const o = digitOrigin(d);
-  const r = segRect(s, o.x, o.y);
-  return {
-    fx: (r.x - PATCH.x) / PATCH.w,
-    fy: (r.y - PATCH.y) / PATCH.h,
-    fw: r.w / PATCH.w,
-    fh: r.h / PATCH.h,
-  };
-}
-
-/**
- * Fraction of a segment to average over. Sample the CENTRE only: at range,
- * blur pulls the black background into a stroke's outer pixels and an edge
- * sample reads dark. The middle 50% is the part still the colour it was painted.
- */
-export const SEG_SAMPLE_FRAC = 0.5;
-
-/** Centre-inset sample window for segment s of digit d, as patch fractions. */
-export function segSampleFrac(d: number, s: number) {
-  const r = segRectFrac(d, s);
-  const mx = (r.fw * (1 - SEG_SAMPLE_FRAC)) / 2;
-  const my = (r.fh * (1 - SEG_SAMPLE_FRAC)) / 2;
-  return {
-    fx: r.fx + mx,
-    fy: r.fy + my,
-    fw: r.fw * SEG_SAMPLE_FRAC,
-    fh: r.fh * SEG_SAMPLE_FRAC,
-  };
-}
-
-/** Every sample window, in decode order: digit 0 a..g, digit 1 a..g, digit 2 a..g. */
-export function allSampleWindows() {
-  const out = [];
-  for (let d = 0; d < D_N; d++) for (let s = 0; s < 7; s++) out.push(segSampleFrac(d, s));
-  return out;
-}
-
-// -------------------------------------------------------------- the colours
-
-/** Digit colour IS the consent bit. MUST match BASE_IN/BASE_OUT in the Lua. */
-export const DIGIT_IN = 0x00ff00; // GREEN = opt-in
-export const DIGIT_OUT = 0xff0000; // RED   = opt-out
-export const UNLIT_RGB = 0x000000;
-
-export const rgb = (hex: number) => ({
-  r: (hex >> 16) & 0xff,
-  g: (hex >> 8) & 0xff,
-  b: hex & 0xff,
-});
-
-// ----------------------------------------------------------------- decoding
-
-/**
- * Why every decision is relative and not a fixed threshold: the badge's
- * `dim()` scales all channels by one factor (the wearer retunes it live with
- * UP/DOWN), and the camera applies its own unknown gain on top. Absolute
- * values are meaningless; ratios within one frame are not.
- */
-export const CLASSIFY = {
-  /** peak channel above this x the frame's strongest stroke ⇒ LIT. */
-  LIT_FRAC: 0.55,
-  /** below this ⇒ UNLIT (background). */
-  DARK_FRAC: 0.28,
-  /** the frame's strongest stroke must clear this, or the badge isn't there. */
-  MIN_PEAK: 24,
-  /** |g - r| / max(g, r) below this ⇒ hue too washed out to call consent. */
-  HUE_MARGIN: 0.25,
-} as const;
-
-export type Sample = { r: number; g: number; b: number };
-/** true = lit, false = unlit, null = too ambiguous to call. */
-export type SegRead = boolean | null;
-
-/**
- * Classify one segment against the frame's own peak. The band between
- * DARK_FRAC and LIT_FRAC is deliberately dead: a sample landing there returns
- * null rather than guessing, which fails the glyph table and keeps the face
- * blurred.
- */
-export function classifySegment(peakOfSample: number, framePeak: number): SegRead {
-  if (framePeak <= 0) return null;
-  const f = peakOfSample / framePeak;
-  if (f >= CLASSIFY.LIT_FRAC) return true;
-  if (f <= CLASSIFY.DARK_FRAC) return false;
-  return null;
-}
-
-/**
- * Seven segment reads (a..g) -> nibble, or null. Null when any segment is
- * unreadable, or the pattern is not one of the 16 valid glyphs — 112 of the
- * 128 possible patterns are rejected here, before the CRC ever runs.
- */
-export function decodeGlyph(segs: readonly SegRead[]): number | null {
-  if (segs.length !== 7) return null;
-  let bits = 0;
-  for (let s = 0; s < 7; s++) {
-    const v = segs[s];
-    if (v === null || v === undefined) return null;
-    if (v) bits |= 1 << s;
-  }
-  const n = GLYPH.get(bits);
-  return n === undefined ? null : n;
-}
-
-/** The 7 segment states for nibble n, index 0..6 = a..g. Inverse of decodeGlyph. */
-export function encodeGlyph(n: number): boolean[] {
-  const bits = SEG[n & 0xf];
-  return Array.from({ length: 7 }, (_, s) => ((bits >> s) & 1) === 1);
-}
-
-export type StripeRead = "opt_in" | "opt_out";
-
-/**
- * Consent from the hue of the LIT strokes, pooled across the whole frame
- * rather than read off any single segment — pooling is what makes it survive
- * one blurred or clipped stroke.
- *
- * GREEN (0x00FF00) and RED (0xFF0000) share a zero blue channel and differ in
- * exactly one comparison, so this survives gain, dimming, and moderate
- * white-balance drift.
- *
- * FAIL-SAFE: nothing lit, or hue too close to call, returns "opt_out".
- */
-export function classifyConsent(lit: readonly Sample[]): StripeRead {
-  if (lit.length === 0) return "opt_out";
-  let R = 0, G = 0;
-  for (const s of lit) { R += s.r; G += s.g; }
-  const hi = Math.max(R, G);
-  if (hi <= 0 || Math.abs(G - R) / hi < CLASSIFY.HUE_MARGIN) return "opt_out";
-  return G > R ? "opt_in" : "opt_out";
+  return d2 / Math.max(1e-9, d1) >= margin ? best : null;
 }
 
 // -------------------------------------------------------------- wire format
 
 export const ID_BITS = 8;
-export const CRC_BITS = 4;
-export const PAYLOAD_BITS = ID_BITS + CRC_BITS; // 12
-export const NIBBLE_BITS = 4;
-/** 3 digits x 4 bits = 12. Change one and this stops being true. */
-export const PAYLOAD_FITS = D_N * NIBBLE_BITS === PAYLOAD_BITS;
-export const SEGMENTS_PER_FRAME = D_N * 7; // 21
+/** id(8) | consent(1) | reserved(1). The reserved bit is transmitted as 0 and
+ *  checked as 0 on receipt — a free extra bit of "this is really our frame". */
+export const MSG_BITS = 10;
+export const CRC_BITS = 6;
+export const PAYLOAD_BITS = MSG_BITS + CRC_BITS; // 16
 
-/** CRC-4, polynomial x^4 + x + 1 (0b10011). Mirrors `crc4` in the Lua source. */
-export function crc4(value: number, nbits: number): number {
+export const BITS_PER_SYMBOL = 2;
+export const DATA_SYMBOLS = PAYLOAD_BITS / BITS_PER_SYMBOL; // 8
+/** 1 marker + 8 data symbols. */
+export const SYMBOLS_PER_FRAME = 1 + DATA_SYMBOLS; // 9
+
+/** Symbol periods the badge can be cycled through with B. Default is 100 ms. */
+export const TIMING_MS = [80, 100, 120, 150] as const;
+export const DEFAULT_TIMING_MS = 100;
+
+/**
+ * Frame duration at the default rate: 9 symbols x 100 ms. Two matching frames
+ * are needed before an id is trusted, so first lock is ~1.8-2.7 s including
+ * acquisition — which is why flags.BEACON_CONFIRM_MS had to go 1500 -> 4000.
+ * At 1500 a 900 ms frame could NEVER confirm and every badge stayed blurred.
+ */
+export const FRAME_MS = SYMBOLS_PER_FRAME * DEFAULT_TIMING_MS; // 900
+
+// --------------------------------------------------------------------- crc
+
+/**
+ * CRC-6, polynomial x^6 + x + 1 (0b1000011, tap 0x03). Mirrors `crc6` in the
+ * Lua source.
+ *
+ * Call it AUGMENTED — crc6(msg << CRC_BITS, PAYLOAD_BITS), never
+ * crc6(msg, MSG_BITS). v1 used the non-augmented form, which loses the
+ * burst-detection guarantee: measured at degree 6 over a 10-bit message it
+ * degenerates almost to the identity and 78% of two-symbol-error frames
+ * slipped through, versus ~1/64 for the augmented form.
+ *
+ * Why degree 6 and not v1's degree 4: a differential symbol error corrupts two
+ * adjacent payload dibits, i.e. a burst of at most 4 bits, and a degree-r CRC
+ * with a nonzero constant term detects EVERY burst of length <= r. Degree 4
+ * measured a wrong id on 0.0076% of frames at 22 px — one every two hours per
+ * badge. Degree 6 measured zero in 500 000 frames at every width down to 12 px.
+ * The two extra bits were otherwise going to be reserved zeros, which measured
+ * almost nothing.
+ *
+ * 32-BIT NOTE for the Lua side: the largest intermediate here is msg << 6 =
+ * 0xFFC0, so nothing in this path can exceed 2147483647 and silently become a
+ * float (which would then fail every bitwise operator).
+ */
+export function crc6(value: number, nbits: number): number {
   let reg = 0;
   for (let i = nbits - 1; i >= 0; i--) {
     const bit = (value >> i) & 1;
-    const top = (reg >> 3) & 1;
-    reg = ((reg << 1) | bit) & 0xf;
-    if (top === 1) reg ^= 0x3;
+    const top = (reg >> 5) & 1;
+    reg = ((reg << 1) | bit) & 0x3f;
+    if (top === 1) reg ^= 0x03;
   }
-  return reg & 0xf;
+  return reg & 0x3f;
 }
 
-/** Pack an 8-bit beacon id into the 12-bit on-the-wire payload. */
-export function packPayload(id: number): number {
-  const masked = id & 0xff;
-  return (masked << CRC_BITS) | crc4(masked, ID_BITS);
+/** Pack id + consent into the 16-bit on-the-wire payload. */
+export function packPayload(id: number, optIn: boolean): number {
+  const msg = ((id & 0xff) << 2) | (optIn ? 2 : 0); // reserved bit stays 0
+  return (msg << CRC_BITS) | crc6(msg << CRC_BITS, PAYLOAD_BITS);
 }
 
-/** Unpack a 12-bit payload. Returns null when the CRC does not check out. */
-export function unpackPayload(payload: number): number | null {
-  const id = (payload >> CRC_BITS) & 0xff;
-  const got = payload & 0xf;
-  return crc4(id, ID_BITS) === got ? id : null;
+/** Unpack a 16-bit payload. null = reserved bit set or CRC mismatch ⇒ blur. */
+export function unpackPayload(payload: number): { id: number; optIn: boolean } | null {
+  const msg = (payload >> CRC_BITS) & 0x3ff;
+  if ((msg & 1) !== 0) return null; // reserved must be 0
+  if (crc6(msg << CRC_BITS, PAYLOAD_BITS) !== (payload & 0x3f)) return null;
+  return { id: (msg >> 2) & 0xff, optIn: ((msg >> 1) & 1) === 1 };
 }
 
-/** The 3-digit KEY the badge prints for `id`, e.g. 0x27 -> "271". */
-export function keyText(id: number): string {
-  const p = packPayload(id);
-  const H = "0123456789ABCDEF";
-  return H[(p >> 8) & 0xf] + H[(p >> 4) & 0xf] + H[p & 0xf];
-}
-
-/** All 21 segment states the badge paints for `id`, digit 0 first, a..g. */
-export function encodeSegments(id: number): boolean[] {
-  const p = packPayload(id);
-  const out: boolean[] = [];
-  for (let d = 0; d < D_N; d++) {
-    out.push(...encodeGlyph((p >> (NIBBLE_BITS * (D_N - 1 - d))) & 0xf));
+/**
+ * The 9 alphabet indices the badge shows, in order. This is the transmitter,
+ * and `decodeFrame` is its exact inverse — the self-check asserts the round
+ * trip for all 256 ids x both consents, which is how the two lanes stay honest.
+ *
+ * Symbol 0 is the marker. Each data symbol then steps the previous colour
+ * forward by 1 + b around the 5-ring, where b is the next 2 payload bits, MSB
+ * first. The +1 is the whole trick: the step is never 0, so the colour ALWAYS
+ * changes and a frame-differencing segmenter can never miss a symbol boundary.
+ */
+export function frameSymbols(id: number, optIn: boolean): number[] {
+  const payload = packPayload(id, optIn);
+  const out = [optIn ? MARK_IN_INDEX : MARK_OUT_INDEX];
+  let prev = 0;
+  for (let k = 0; k < DATA_SYMBOLS; k++) {
+    const b = (payload >> (PAYLOAD_BITS - BITS_PER_SYMBOL * (k + 1))) & 0b11;
+    prev = (prev + 1 + b) % RADIX;
+    out.push(prev);
   }
   return out;
 }
 
 /**
- * Assemble a beacon id from 21 segment reads, digit 0 (most significant
- * nibble) first, a..g within each digit. Null on any unreadable segment,
- * invalid glyph, or CRC failure.
- */
-export function decodeSegments(segs: readonly SegRead[]): number | null {
-  if (segs.length !== SEGMENTS_PER_FRAME) return null;
-  let payload = 0;
-  for (let d = 0; d < D_N; d++) {
-    const n = decodeGlyph(segs.slice(d * 7, d * 7 + 7));
-    if (n === null) return null;
-    payload = (payload << NIBBLE_BITS) | n;
-  }
-  return unpackPayload(payload);
-}
-
-/**
- * The whole decode, from 21 averaged RGB samples in `allSampleWindows()`
- * order. Self-calibrating: the brightness reference is the frame's own
- * strongest stroke, so no white ring is needed.
+ * Assemble one frame from exactly SYMBOLS_PER_FRAME alphabet indices, the
+ * first of which must be a marker.
  *
- * Returns null when there is no badge there, or anything fails to resolve.
- * Every failure path lands on blurred; that is the point.
+ * Five independent ways to return null, and every one of them means "keep the
+ * face blurred" (DEFAULT_CONSENT = blur):
+ *   1. wrong number of symbols;
+ *   2. symbol 0 is not a marker — not a frame boundary;
+ *   3. a marker appears inside the data run — a frame boundary landed where
+ *      data should be, so the stream is misaligned;
+ *   4. a zero step — impossible by construction, so the read is corrupt;
+ *   5. marker and payload consent disagree, or the CRC/reserved check fails.
  */
-export function decodeFrame(samples: readonly Sample[]):
-  { id: number; consent: StripeRead } | null {
-  if (samples.length !== SEGMENTS_PER_FRAME) return null;
-  const peak = (s: Sample) => Math.max(s.r, s.g, s.b);
-  const framePeak = Math.max(...samples.map(peak));
-  if (framePeak < CLASSIFY.MIN_PEAK) return null;
-
-  const reads = samples.map((s) => classifySegment(peak(s), framePeak));
-  const id = decodeSegments(reads);
-  if (id === null) return null;
-
-  const lit = samples.filter((_, i) => reads[i] === true);
-  return { id, consent: classifyConsent(lit) };
+export function decodeFrame(sym: readonly number[]): { id: number; optIn: boolean } | null {
+  if (sym.length !== SYMBOLS_PER_FRAME) return null;
+  const m = sym[0];
+  if (m !== MARK_IN_INDEX && m !== MARK_OUT_INDEX) return null;
+  let payload = 0, prev = 0;
+  for (let k = 1; k <= DATA_SYMBOLS; k++) {
+    const cur = sym[k];
+    if (cur < 0 || cur >= RADIX) return null; // a marker inside the data run
+    const d = (cur - prev + RADIX) % RADIX;
+    if (d === 0) return null; // impossible by construction
+    payload = (payload << BITS_PER_SYMBOL) | (d - 1);
+    prev = cur;
+  }
+  const out = unpackPayload(payload);
+  if (out === null) return null;
+  if (out.optIn !== (m === MARK_IN_INDEX)) return null; // marker must agree
+  return out;
 }
 
 // ------------------------------------------------------------------- radio
@@ -364,30 +372,32 @@ export function decodeFrame(samples: readonly Sample[]):
  * BLE messages on the badge's restricted Lua channel. Payloads are at most
  * 44 bytes and every one of ours starts with this tag.
  *
- *   CNSF<id>        film event  -> badge flashes MAGENTA on the LEDs
- *   CNSC<id>0       consent mirror pushed down from the registry. The badge
- *                   honours ONLY "0" (opt-out): the id is public, so an
- *                   unsigned CNSC<id>1 would let anyone opt a wearer IN.
+ *   CNSF<id>        film event  -> badge raises the red alert
+ *   CNSC<id><0|1>   consent mirror pushed down from the registry
  *   CNSR<id><0|1>   consent-change REQUEST from the badge (unsigned; the
  *                   registry client is what actually signs and submits)
  *
  * <id> is the beacon id as two uppercase hex digits.
+ *
+ * The radio is NO LONGER ON THE CRITICAL PATH. Consent travels in the light
+ * now, restrict-only, so "press A -> blurred" works with zero radio (bounded
+ * at BEACON_ID_HOLD_MS + BIND_TTL_MS = 2.8 s). This is convenience telemetry.
  */
 export const RADIO_TAG = "CNS";
 export const RADIO_MAX_BYTES = 44;
 
 export const filmEvent = (id: number) => `${RADIO_TAG}F${hex2(id)}`;
-/** Only the restrictive direction is honoured by the badge. */
-export const consentPushOptOut = (id: number) => `${RADIO_TAG}C${hex2(id)}0`;
+export const consentPush = (id: number, optIn: boolean) =>
+  `${RADIO_TAG}C${hex2(id)}${optIn ? "1" : "0"}`;
 
 export function hex2(v: number): string {
   return (v & 0xff).toString(16).toUpperCase().padStart(2, "0");
 }
 
 /**
- * Fold a provisioned `badge.me.badge_id()` string down to the 8-bit beacon id
- * (FNV-1a, XOR-folded). The badge computes this identically, so the registry
- * can derive a PDA seed from the same value.
+ * Fold a provisioned `badge.me.badge_id()` string down to the 8-bit beacon
+ * id (FNV-1a, XOR-folded). The badge computes this identically, so the
+ * registry can derive a PDA seed from the same value.
  */
 export function beaconIdFromBadgeId(badgeId: string): number {
   let h = 2166136261 >>> 0;
@@ -396,4 +406,120 @@ export function beaconIdFromBadgeId(badgeId: string): number {
     h = Math.imul(h, 16777619) >>> 0;
   }
   return ((h >>> 24) ^ (h >>> 16) ^ (h >>> 8) ^ h) & 0xff;
+}
+
+// =============================================================================
+// v3 — STATIC KEY (firmware 0.4.0, PR #10). This is what the badge shows now.
+// =============================================================================
+//
+// The beacon screen no longer blinks. It shows ONE static picture the camera
+// reads from a single frame: a white ring and three giant 7-segment hex digits
+// on black. No timing, no clock recovery, no frame assembly — a dropped frame
+// costs nothing and a badge locks on the first clean frame.
+//
+//   key = id(8) << 4 | crc4(id)          three hex digits, MSB first
+//   e.g. id 0x27 → crc4 = 0x1 → "271"     (the photo in the PR)
+//
+// The DIGIT COLOUR carries consent: MINT (MARK_OPT_IN) = opt-in, ROSE
+// (MARK_OPT_OUT) = opt-out. Still restrict-only on the capture side.
+//
+// Everything below MUST match firmware/consentinel-beacon.lua (D_*, SEG, crc4,
+// BORDER, PAD). A one-value disagreement means every badge stays blurred.
+
+/**
+ * Screen geometry as the camera SEES it, in badge pixels (320x240 screen).
+ *
+ * The firmware builds the beacon inside a widget that sits at the root's
+ * padding (PAD = 30) and CLIPS its children, so the white ring's top and left
+ * edges (drawn at -PAD) are cut off: what is visible is an L — a white bar on
+ * the RIGHT (x 296..320) and along the BOTTOM (y 216..240) — and the three
+ * digit cells at x = 32 + 90k, y = 40 (76x160 each, 14 px apart). The decoder
+ * only needs the digits; the bars are a bonus. If the firmware later escapes
+ * the clip, the full ring appears and nothing here has to change.
+ */
+export const KEY = {
+  pad: 30, // root padding the beacon widget sits at (screen origin of the visible key area)
+  border: 24, // ring thickness (= BORDER in the firmware; = BORDER_PX above)
+  digits: 3,
+  w: 76, // digit cell width
+  h: 160, // digit cell height
+  t: 18, // segment thickness
+  gap: 14, // between cells
+  half: 53, // vertical segment length: (h - 3t) / 2
+  x0: 32, // screen x of cell 0 (pad + (272 - 256) / 2)
+  y0: 40, // screen y of every cell (pad + (192 - 160) / 2)
+  pitch: 90, // w + gap
+  span: 256, // 3 cells + 2 gaps
+  barRight: 296, // visible white bar: x 296..320, y 30..240
+  barBottom: 216, // visible white bar: y 216..240, x 30..320
+} as const;
+
+/**
+ * 7-segment patterns for hex digits 0..F. Bit 1 a(top) 2 b(top-right)
+ * 4 c(bottom-right) 8 d(bottom) 16 e(bottom-left) 32 f(top-left) 64 g(middle).
+ * MUST match SEG in the firmware. All 16 values are distinct.
+ */
+export const SEG7: readonly number[] = [
+  0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, // 0 1 2 3 4 5 6 7
+  0x7f, 0x6f, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71, // 8 9 A b C d E F
+];
+export const SEG_A = 1, SEG_B = 2, SEG_C = 4, SEG_D = 8, SEG_E = 16, SEG_F = 32, SEG_G = 64;
+
+/**
+ * Each segment's rectangle inside its cell, in cell units (x, y, w, h), index
+ * 0..6 = a..g. Mirrors seg_geom() in the firmware exactly.
+ */
+export const SEG_RECTS: readonly (readonly [number, number, number, number])[] = (() => {
+  const { w: W, h: H, t: T, half: Hf } = KEY;
+  return [
+    [T, 0, W - 2 * T, T], // a top
+    [W - T, T, T, Hf], // b top-right
+    [W - T, 2 * T + Hf, T, Hf], // c bottom-right
+    [T, H - T, W - 2 * T, T], // d bottom
+    [0, 2 * T + Hf, T, Hf], // e bottom-left
+    [0, T, T, Hf], // f top-left
+    [T, T + Hf, W - 2 * T, T], // g middle
+  ];
+})();
+
+/** Hex digit for a lit-segment mask, or null when no digit lights exactly that set. */
+export function digitFromSegments(mask: number): number | null {
+  const i = SEG7.indexOf(mask & 0x7f);
+  return i < 0 ? null : i;
+}
+
+/**
+ * CRC-4, polynomial x^4 + x + 1 (0b10011). Mirrors crc4() in the firmware —
+ * NON-augmented, over the 8 id bits, exactly as the badge computes it.
+ */
+export function crc4(value: number, nbits: number): number {
+  let reg = 0;
+  for (let i = nbits - 1; i >= 0; i--) {
+    const top = (reg >> 3) & 1;
+    reg = ((reg << 1) | ((value >> i) & 1)) & 0xf;
+    if (top === 1) reg ^= 0x3;
+  }
+  return reg & 0xf;
+}
+
+/** The 12-bit key the badge shows for `id`: id(8) << 4 | crc4(id). */
+export function packKey(id: number): number {
+  return ((id & 0xff) << 4) | crc4(id & 0xff, ID_BITS);
+}
+
+/** id from a 12-bit key, or null when the CRC nibble does not match ⇒ blur. */
+export function unpackKey(key: number): number | null {
+  const id = (key >> 4) & 0xff;
+  return crc4(id, ID_BITS) === (key & 0xf) ? id : null;
+}
+
+/** The three hex digits (0..15) the badge draws for `id`, left to right. */
+export function keyDigits(id: number): [number, number, number] {
+  const k = packKey(id);
+  return [(k >> 8) & 0xf, (k >> 4) & 0xf, k & 0xf];
+}
+
+/** Key text as the badge's CONFIG screen prints it, e.g. "271". */
+export function keyText(id: number): string {
+  return keyDigits(id).map((d) => d.toString(16).toUpperCase()).join("");
 }

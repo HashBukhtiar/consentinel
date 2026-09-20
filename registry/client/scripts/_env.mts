@@ -22,7 +22,7 @@ export interface SeedFile {
   cluster: string;
   cameraLabel: string;
   eventId: string;
-  badges: { badgeId: string; consent: boolean; label: string }[];
+  badges: { badgeId: string; consent: boolean; label: string; contact?: { name: string; email?: string } }[];
 }
 
 export function readSeed(): SeedFile {

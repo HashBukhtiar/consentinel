@@ -43,12 +43,42 @@ export const config = {
   AUDIT_LOG: abs(env("AUDIT_LOG", "../data/audit/film-events.jsonl")),
   /** Badge signing keys (badge-<ID>.json, written by `npm run seed`): the service signs CNSR radio requests with them. */
   BADGE_KEYS_DIR: abs(env("BADGE_KEYS_DIR", "../registry/keys")),
+  /**
+   * Auto-enrol: a badge id the camera sees for the first time is registered as
+   * opt_out by the organizer (issuer) key, so a card appears and can be granted.
+   * opt_out can never un-blur anyone, so this is safe for anyone to trigger.
+   */
+  AUTO_REGISTER: bool("AUTO_REGISTER", true),
+  ISSUER_KEYPAIR: abs(env("ISSUER_KEYPAIR", "~/.config/solana/id.json")),
+  /** Demo key file the operator panel loads (so it can sign for auto-enrolled badges too). */
+  DEMO_KEYS_FILE: abs(env("DEMO_KEYS_FILE", "../capture-app/public/demo/badges.json")),
+  /** Where the capture app's 📸 diag snapshots land (frame JPEG, badge crops, classifier JSON). */
+  DIAG_DIR: abs(env("DIAG_DIR", "../data/diag")),
+  /** Rent guard: at most this many auto-enrolments per service run. */
+  AUTO_REGISTER_MAX: Number(env("AUTO_REGISTER_MAX", "50")),
   /** While a radio bridge is connected, re-mirror every badge's consent this often (0 = off). Log pushes are the fast path. */
   RADIO_SYNC_MS: Number(env("RADIO_SYNC_MS", "20000")),
   AUDIO_DIR: join(SERVICE_DIR, "audio"),
   /** Debounce identical spoken alerts per badge (the capture app already debounces FilmEvents). */
   ALERT_MIN_INTERVAL_MS: Number(env("ALERT_MIN_INTERVAL_MS", "8000")),
+  /**
+   * Notices: for every film-event of an opted-out badge, `record_capture`
+   * (filmed) then `record_notice` (told) on-chain, signed by the camera key.
+   */
+  NOTIFY_ON_CHAIN: bool("NOTIFY_ON_CHAIN", true),
+  /** Organizer's directory badge → person (the `contact` field of each seed badge). Never on-chain. */
+  CONTACTS_FILE: abs(env("CONTACTS_FILE", "../data/demo/seed-consents.json")),
+  /** Email transport. The demo ships only `dry-run`: composed + logged, nothing sent. */
+  EMAIL_MODE: "dry-run" as const,
+  /** Where composed emails and notice outcomes are appended (JSONL; holds addresses — gitignored dir). */
+  NOTICE_LOG: abs(env("NOTICE_LOG", "../data/audit/notices.jsonl")),
+  /** One on-chain notice per badge per this window; film-events inside it are covered by the last notice (still audited + attested). */
+  NOTICE_MIN_INTERVAL_MS: Number(env("NOTICE_MIN_INTERVAL_MS", "60000")),
   MAX_PENDING_EVENTS: 500,
+  /** Thru (Unto Labs) evidence ledger — every film-event + attestation batch becomes its own Alphanet account via the `thru` CLI. Auto-disables if the CLI/funds are missing. */
+  THRU_ENABLED: bool("THRU_ENABLED", true),
+  THRU_FEE_PAYER: env("THRU_FEE_PAYER", "consentinel"),
+  THRU_EXPLORER: env("THRU_EXPLORER", "https://scan.thru.org"),
 };
 
 /** RPC URL with any query string (API keys live there) removed. */

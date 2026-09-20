@@ -10,6 +10,16 @@ export interface BeaconReading {
   beaconId: string; // two uppercase hex digits — hex2() in @shared/beacon
   imagePosition: { x: number; y: number }; // normalized [0,1]; center of the patch quad
   confidence: number; // decode confidence 0..1
+  /**
+   * Consent as carried IN THE LIGHT (the MINT/ROSE frame marker, cross-checked
+   * against payload bit 7). Present on an optical decode; absent from the stub.
+   * RESTRICT-ONLY for enforcement: decide() clears a face only on the on-chain
+   * record, and a light-borne OPT-OUT forces an immediate blur. The app also
+   * relays a disagreement with the chain as the badge's own CNSR request
+   * (src/events/consentRequest.ts) — the camera is the radio bridge — so
+   * pressing A on the badge changes the record without touching a wallet.
+   */
+  optIn?: boolean;
 }
 
 // A tracked face in the current frame (internal to the capture app).
@@ -18,6 +28,7 @@ export interface Track {
   bbox: { x: number; y: number; w: number; h: number }; // normalized [0,1]
   beaconId?: string; // set by associate(); EXPIRES — see flags.BIND_TTL_MS
   boundAtMs?: number; // when beaconId was last (re)confirmed by a sighting
+  beaconOptIn?: boolean; // consent read off the bound beacon's light (false ⇒ forced blur)
   consent: Consent;
   blurred: boolean;
   missed: number; // frames since last detection (drives occlusion persistence)

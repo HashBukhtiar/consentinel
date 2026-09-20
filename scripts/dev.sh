@@ -20,7 +20,8 @@ if [ "$MODE" = "localnet" ]; then
 fi
 
 pids=()
-cleanup() { echo; echo "stopping…"; kill "${pids[@]}" 2>/dev/null || true; wait 2>/dev/null || true; }
+kill_tree() { local p; for p in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$p"; done; kill "$1" 2>/dev/null || true; }
+cleanup() { echo; echo "stopping…"; for p in "${pids[@]}"; do kill_tree "$p"; done; wait 2>/dev/null || true; }
 trap cleanup INT TERM EXIT
 
 ( cd service && npm run dev 2>&1 | awk '{print "[svc] " $0; fflush()}' ) & pids+=($!)
