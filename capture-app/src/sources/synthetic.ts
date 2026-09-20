@@ -1,4 +1,4 @@
-import { paintPatch, symbolCells } from "../decode/patch";
+import { paintPatch, symbolColor, framePeriodSymbols } from "../decode/patch";
 
 // Synthetic badge source: overlays REAL-format animated beacon patches onto a
 // base video (your webcam) and returns a MediaStream, so the optical decoder
@@ -6,9 +6,13 @@ import { paintPatch, symbolCells } from "../decode/patch";
 // expects, so a successful decode here proves the whole pixel path.
 //
 // Symbol period is intentionally slower than the badge default — the decoder
-// recovers the clock from the clock lane, so any period works, and slower means
-// the pipeline reliably samples every symbol at typical FPS.
+// segments on colour CHANGE rather than a clock, so any period works, and
+// slower means the pipeline reliably samples every symbol at typical FPS.
 const SYNTH_SYMBOL_MS = 150;
+
+// Synthetic badges advertise opt-in, so the happy path (a decoded id that
+// resolves to a clear face) is what you see with zero hardware.
+const SYNTH_OPT_IN = true;
 
 export interface SyntheticHandle {
   stream: MediaStream;
@@ -30,12 +34,12 @@ export function startSynthetic(base: HTMLVideoElement, ids: number[] = [0x4e]): 
     if (base.videoWidth) ctx.drawImage(base, 0, 0, w, h);
     else { ctx.fillStyle = "#111"; ctx.fillRect(0, 0, w, h); }
 
-    const s = Math.floor((performance.now() - t0) / SYNTH_SYMBOL_MS) % 3; // current symbol
-    const pw = Math.round(w * 0.22), ph = Math.round(pw / 2.3); // aspect ≈ 2.3
+    const s = Math.floor((performance.now() - t0) / SYNTH_SYMBOL_MS) % framePeriodSymbols;
+    const pw = Math.round(w * 0.22), ph = Math.round((pw * 3) / 4); // aspect = 4:3
     ids.forEach((id, i) => {
       const px = Math.round(xs[i] * w - pw / 2), py = Math.round(h * 0.68);
       const img = ctx.createImageData(pw, ph);
-      paintPatch(img.data, pw, ph, { x: 0, y: 0, w: pw, h: ph }, symbolCells(id, s));
+      paintPatch(img.data, pw, ph, { x: 0, y: 0, w: pw, h: ph }, symbolColor(id, SYNTH_OPT_IN, s));
       ctx.putImageData(img, px, py);
     });
   };
