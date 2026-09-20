@@ -33,7 +33,16 @@ function boxLum(f: Frame, cx: number, cy: number, hw: number, hh: number): numbe
 }
 
 // ---- localization: bright connected components filtered by size/aspect ------
-function locatePatches(f: Frame): Box[] {
+// Split into scan + reject so the tuning page (tune.html) can show WHY a
+// candidate was thrown away. locatePatches() is the production path and keeps
+// exactly the old behaviour.
+export interface Component { x: number; y: number; w: number; h: number; count: number; aspect: number; fill: number }
+
+/** Smallest blob worth reporting to a human. Well below BEACON_MIN_W so the
+ *  tuner can say "your badge is 14px, the floor is 22" instead of nothing. */
+const DIAG_MIN_W = 6;
+
+function scanComponents(f: Frame): Component[] {
   const { width: W, height: H } = f;
   const bright = new Uint8Array(W * H);
   for (let i = 0; i < W * H; i++) {
@@ -42,7 +51,7 @@ function locatePatches(f: Frame): Box[] {
   }
   const seen = new Uint8Array(W * H);
   const stack: number[] = [];
-  const out: Box[] = [];
+  const out: Component[] = [];
   for (let start = 0; start < W * H; start++) {
     if (!bright[start] || seen[start]) continue;
     let minX = W, minY = H, maxX = 0, maxY = 0, count = 0;
@@ -59,17 +68,30 @@ function locatePatches(f: Frame): Box[] {
       if (y < H - 1 && bright[p + W] && !seen[p + W]) { seen[p + W] = 1; stack.push(p + W); }
     }
     const w = maxX - minX + 1, h = maxY - minY + 1;
-    const aspect = w / h;
-    if (w < flags.BEACON_MIN_W || w > W * 0.95) continue;
-    if (aspect < flags.BEACON_ASPECT_MIN || aspect > flags.BEACON_ASPECT_MAX) continue;
-    if (count < w * h * 0.08) continue; // reject sparse noise, keep border-ring shapes
-    out.push({ x: minX, y: minY, w, h });
+    if (w < DIAG_MIN_W) continue;
+    out.push({ x: minX, y: minY, w, h, count, aspect: w / h, fill: count / (w * h) });
   }
   return out;
 }
 
+/** null = accepted as a badge patch; otherwise a human-readable reason. */
+export function rejectReason(c: Component, frameW: number): string | null {
+  if (c.w < flags.BEACON_MIN_W) return `too small (w ${c.w} < ${flags.BEACON_MIN_W})`;
+  if (c.w > frameW * 0.95) return "fills the frame";
+  if (c.aspect < flags.BEACON_ASPECT_MIN) return `too tall (aspect ${c.aspect.toFixed(2)} < ${flags.BEACON_ASPECT_MIN})`;
+  if (c.aspect > flags.BEACON_ASPECT_MAX) return `too wide (aspect ${c.aspect.toFixed(2)} > ${flags.BEACON_ASPECT_MAX})`;
+  if (c.fill < 0.08) return `too sparse (fill ${c.fill.toFixed(3)} < 0.08)`; // noise, not a border ring
+  return null;
+}
+
+function locatePatches(f: Frame): Box[] {
+  return scanComponents(f)
+    .filter((c) => rejectReason(c, f.width) === null)
+    .map((c) => ({ x: c.x, y: c.y, w: c.w, h: c.h }));
+}
+
 // ---- cell sampling ----------------------------------------------------------
-interface Sampled { bits: boolean[]; borderLum: number; confident: boolean }
+export interface Sampled { bits: boolean[]; lums: number[]; thr: number; borderLum: number; minMargin: number; confident: boolean }
 
 // Brightness of the always-lit border: max over the 4 side midpoints (the
 // border is uniform, so max is a stable white reference even under tilt/noise).
@@ -88,6 +110,7 @@ function sampleCells(f: Frame, bb: Box): Sampled {
   const bl = borderLum(f, bb);
   const thr = flags.BEACON_CELL_LIT_FRAC * bl;
   const bits: boolean[] = [];
+  const lums: number[] = [];
   let minMargin = Infinity, anyDark = false;
   for (let i = 1; i <= 6; i++) {
     const r = cellRectFrac(i);
@@ -95,6 +118,7 @@ function sampleCells(f: Frame, bb: Box): Sampled {
     const lum = boxLum(f,
       bb.x + (r.fx + r.fw / 2) * bb.w, bb.y + (r.fy + r.fh / 2) * bb.h,
       r.fw * bb.w * 0.3, r.fh * bb.h * 0.3);
+    lums.push(lum);
     bits.push(lum > thr);
     if (lum <= thr) anyDark = true;
     minMargin = Math.min(minMargin, Math.abs(lum - thr));
@@ -102,8 +126,20 @@ function sampleCells(f: Frame, bb: Box): Sampled {
   // trust the read only with a bright border, a dark cell (rejects solid-white
   // blobs), and every cell clear of the threshold; CRC rejects the rest
   const confident = bl > flags.BEACON_MIN_BORDER && anyDark && minMargin > bl * flags.BEACON_CONTRAST_FRAC;
-  return { bits, borderLum: bl, confident };
+  return { bits, lums, thr, borderLum: bl, minMargin, confident };
 }
+
+// Funnel counters for the tuning page (tune.html). Bumping four integers per
+// frame is free; nothing in the hero path reads them.
+export const decoderStats = {
+  symbols: 0, // distinct cell patterns seen (≈ symbol transitions)
+  anchors: 0, // symbol-0 frame markers seen
+  assembled: 0, // 3-symbol groups completed
+  crcOk: 0,
+  crcFail: 0,
+  confirmed: 0, // ids that repeated within BEACON_CONFIRM_MS and became trusted
+  reset() { this.symbols = this.anchors = this.assembled = this.crcOk = this.crcFail = this.confirmed = 0; },
+};
 
 // ---- per-patch symbol assembly ---------------------------------------------
 // The badge holds each symbol for ~2-3 camera frames, so we treat a change in
@@ -124,18 +160,26 @@ class FrameAssembler {
     const key = sym.slice(1).map((b) => (b ? 1 : 0)).join("");
     if (key === this.lastKey) return; // same symbol still on screen
     this.lastKey = key;
+    decoderStats.symbols++;
 
     if (sym[FRAME_CELL - 1]) {
+      decoderStats.anchors++;
       this.collecting = [sym]; // symbol 0 — (re)anchor the frame
     } else if (this.collecting) {
       this.collecting.push(sym);
       if (this.collecting.length === SYMBOLS_PER_FRAME) {
         const id = decodeFrame(this.collecting);
         this.collecting = null;
+        decoderStats.assembled++;
+        if (id === null) decoderStats.crcFail++;
         if (id !== null) {
+          decoderStats.crcOk++;
           this.hist = this.hist.filter((h) => tMs - h.t < flags.BEACON_CONFIRM_MS);
           this.hist.push({ id, t: tMs });
-          if (this.hist.filter((h) => h.id === id).length >= 2) { this.lastId = id; this.lastDecodeMs = tMs; }
+          if (this.hist.filter((h) => h.id === id).length >= 2) {
+            if (this.lastId !== id) decoderStats.confirmed++;
+            this.lastId = id; this.lastDecodeMs = tMs;
+          }
         }
       }
     }
@@ -188,4 +232,4 @@ const decoder = new BeaconDecoder();
 export const decodeBeacons: DecodeBeacons = (frame, tMs) => decoder.decode(frame, tMs);
 
 // exported for the self-check
-export const _internal = { locatePatches, sampleCells };
+export const _internal = { locatePatches, sampleCells, scanComponents };
