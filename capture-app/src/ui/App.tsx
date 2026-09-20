@@ -63,16 +63,21 @@ export function App() {
 
   // Overlay real-format beacon patches on the webcam and decode them live — no
   // hardware. Switches the decoder to optical for this session only.
+  // Works without a camera too (dark background), so the whole optical path —
+  // decode → bind → chain lookup → light-borne consent relay — runs on any machine.
   async function startSyntheticBadge() {
     stop();
     try {
-      const cam = await startCamera(deviceId || undefined);
       const base = baseRef.current!;
-      base.srcObject = cam;
-      await base.play().catch(() => {});
+      let camera = true;
+      try {
+        const cam = await startCamera(deviceId || undefined);
+        base.srcObject = cam;
+        await base.play().catch(() => {});
+      } catch { base.srcObject = null; camera = false; }
       setBeacon("optical");
       synthRef.current = startSynthetic(base);
-      await startPipeline(synthRef.current.stream, null, "Synthetic badge · optical");
+      await startPipeline(synthRef.current.stream, null, "Synthetic badge · optical" + (camera ? "" : " · no camera"));
     } catch (e: any) { fail(e); }
   }
 

@@ -24,6 +24,13 @@ export function startSynthetic(base: HTMLVideoElement, ids: number[] = [0x4e]): 
   const ctx = canvas.getContext("2d")!;
   const t0 = performance.now();
   let raf = 0;
+  // captureStream(0) + an explicit requestFrame() after every paint: an
+  // automatic-rate capture of an off-DOM canvas feeding a hidden <video> can
+  // drop to ~1 fps (measured: 4 frames in 3 s), which makes the beacon look
+  // like it changes colour once a second and every frame fails CRC.
+  const stream = canvas.captureStream(0);
+  const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
+  const pushFrame = () => { try { (track.requestFrame ?? (stream as MediaStream & { requestFrame?: () => void }).requestFrame)?.call(track.requestFrame ? track : stream); } catch { /* auto-rate fallback */ } };
 
   const xs = ids.length === 1 ? [0.5] : ids.map((_, i) => 0.5 + (i - (ids.length - 1) / 2) * 0.33);
 
@@ -42,10 +49,10 @@ export function startSynthetic(base: HTMLVideoElement, ids: number[] = [0x4e]): 
       paintPatch(img.data, pw, ph, { x: 0, y: 0, w: pw, h: ph }, symbolColor(id, SYNTH_OPT_IN, s));
       ctx.putImageData(img, px, py);
     });
+    pushFrame();
   };
   draw();
 
-  const stream = canvas.captureStream(30);
   return {
     stream,
     stop: () => { cancelAnimationFrame(raf); stream.getTracks().forEach((t) => t.stop()); },

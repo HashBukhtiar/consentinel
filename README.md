@@ -76,37 +76,41 @@ scripts/dev.sh                # service (:8787) + capture app (:5173), Ctrl+C st
 
 Then, in order:
 
-1. **Badge** — install `firmware/consentinel-beacon.lua` on the HTN badge
-   (`firmware/README.md` §2), open *Consentinel*; it shows its `ID` (two hex
-   digits, e.g. `3D`) and blinks. Any badge works: the first time a camera sees
-   an id with no record, the service registers it as `opt_out` (organizer key),
-   so its card appears in the panel within a few seconds. No badge? The app's
-   **Synthetic badge** button overlays a real-format `4E` beacon on your webcam.
+1. **Badge** — push `firmware/consentinel-beacon.min.lua` to the HTN badge
+   (`firmware/README.md` §2), open *Consentinel*. The CONFIG screen shows the
+   wearer's `ID` (two hex digits, e.g. `3D`) and `OPT-IN`/`OPT-OUT`; **A**
+   toggles consent, **START arms the beacon** (full-screen white ring around a
+   colour-blinking block; any key returns to CONFIG). Any badge works: the
+   first time a camera sees an id with no record, the service registers it as
+   `opt_out` (organizer key), so its card appears in the panel within a few
+   seconds. No badge? **Synthetic badge** in the app paints a real-format `4E`
+   beacon (works without a camera too).
 2. **Capture app** — http://localhost:5173 → **Use camera** (decoder is
    *optical* by default; the header button flips to *stub* = fake beacons).
-   Hold the badge **just below your chin, screen square to the camera, close**:
-   the patch must be ≥ 40 px wide in the processing frame, which at the default
-   720 px is within ~50 cm of a laptop webcam (pick **1280px** in the header to
-   roughly double that). With **overlay: on** the feed shows what the decoder
-   sees — red box = patch found but too small/dim/blurred, yellow = reading,
-   green `badge 4E → T1` = decoded and bound to the face above it — and the
-   **Beacons** panel says why nothing decodes. Then the track row shows `4E`,
-   consent from devnet, and the face blurs (seeded `opt_out`).
-   No badge at hand? `http://localhost:5173/?clip=/demo/badge-4E.mp4` runs the
-   whole pipeline on Maaz's badge recording (put any H.264 clip in
-   `capture-app/public/demo/`).
-3. **The on-stage beat** — flip `4E` on-chain any of these ways and watch the
-   blur clear within the sync interval (~1 s push, ≤3 s poll):
-   - badge A button (needs the radio bridge), or `CNSR4E1` ⏎ in `npm run bridge -- --stdin`
-   - operator panel → **grant** (badge-signed + relayed by default)
-   - `cd registry && npm run badge-press -- 4E grant` (the button, from another process)
-   - `cd registry && npm run toggle -- 4E grant` (owner-signed)
+   Hold the badge **just below your chin, screen square to the camera**, with
+   the beacon ARMED (START): the white ring must be ≥ 22 px wide in the
+   processing frame — roughly ≤ 0.9 m from a laptop webcam at 720 px (pick
+   **1280px** in the header for more). A frame is 9 colour symbols ≈ 0.9 s and
+   an id must repeat twice, so hold still ~2–3 s for the first lock. With
+   **overlay: on** the feed shows what the decoder sees — red box = ring found
+   but too small / too dim / clipped to white / no clear colour, yellow =
+   reading, green `badge 3D · OPT-OUT → T1` = decoded and bound to the face
+   above it — and the **Beacons** panel says why nothing decodes. Then the
+   track row shows the id, consent from devnet, and the face blurs (opt_out).
+3. **The on-stage beat** — press **A on the badge** (any key leaves the
+   beacon; toggle, then START again). The light now carries the wearer's
+   choice: an OPT-OUT blurs the face on the very next frame (restrict-only,
+   no chain round-trip), and an OPT-IN is relayed by the camera as the badge's
+   `CNSR` request → the service signs it with the badge's key → the program
+   verifies it on-chain → the cache push clears the face, typically 2–4 s
+   after the decode, with an explorer link in **Badge radio**. No wallet, no
+   panel click. The other ways to flip a record still work: the panel's
+   **grant/revoke**, `npm run badge-press -- 3D grant` or `npm run toggle`
+   in `registry/`, or `CNSR3D1` ⏎ in `npm run bridge -- --stdin`.
 
-   The badge's own **A button only changes the badge's local mirror** and sends
-   a `CNSR` radio request; without the bridge that request never reaches the
-   chain, so the blur does not change. **`delete record…`** on a card really
-   deletes the on-chain record (it asks first): the badge is then unregistered
-   ⇒ always blurred and grant/revoke vanish until `npm run seed` re-registers it.
+   **`delete record…`** on a card really deletes the on-chain record (it asks
+   first): the badge is then unregistered ⇒ always blurred until it is seen
+   again and auto-registered.
 4. **Film event** — with `4E` opted out and on camera: the panel lists the
    event, the laptop speaks (ElevenLabs, or macOS `say` labeled as fallback),
    the **Badge radio** section shows `↓ CNSF4E`, and within 10 s the event is
@@ -263,7 +267,7 @@ Service flags: `service/.env.example` (`SERVICE_TOKEN`, `CORS_ORIGIN`,
 | Badge occluded / out of frame? | Fail-safe: blur on uncertainty, plus a tracker that persists the blur. |
 | Why blockchain? | Consent is user-owned and revocable on-chain, enforcement is tied to that record, and the live revoke→blur-flip proves it. The audit log is hash-anchored so it can't be quietly edited, and the anchoring cadence is constant so the chain reveals nothing about captures. |
 | Who can register a badge? | Only the organizer (`Registry.issuer`), once per badge id — it hands out the physical badge anyway. After that only the badge's key matters. |
-| Why not read OPT-IN off the badge screen? | The light carries only the id. A consent bit in the light could be replayed by anyone to un-blur you; a record only your key can change cannot. The badge's screen is a mirror of the chain, pushed down over radio. |
+| The light carries OPT-IN now — so why the chain? | The light is restrict-only: it can blur you instantly but can never clear you. Clearing needs the on-chain record, which only the badge's key can change; the camera merely relays the badge's request. A replayed "OPT-IN" light therefore cannot un-blur anyone. |
 | Do I have to register every badge by hand? | No. A badge seen for the first time is auto-registered as `opt_out` by the organizer service (`AUTO_REGISTER`), which can never un-blur anyone. The seed file just gives the demo badges labels and initial states. |
 | Can I spoof a badge id? | The chain authenticates `badge_id → consent`, not the emitter of a blink. A replayed opt-in beacon held next to a bystander can un-blur them; a replayed opt-out can force a blur. That is the light channel's limit, stated up front; the upgrade is a rolling code (`badge_id ‖ counter`, HMAC-truncated) or the badge-signed BLE payload we already verify on-chain. |
 | Does the badge need SOL / a wallet? | No. Its A button sends a radio request; the badge's key signs a 49-byte message; a relayer pays; the program verifies the signature, nonce, instance and deadline. |
