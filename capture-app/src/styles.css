@@ -157,6 +157,33 @@ details.debug > summary .dot { margin-left: 0; }
 
 code { font-family: var(--mono); background: var(--card-2); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
 
+/* ---- demo polish: setup disclosure + icon mask ---- */
+details.setup { margin: 0; border: 0; flex-basis: 100%; }
+details.setup > summary { padding: 4px 0 0; font-size: 12px; }
+details.setup[open] > summary { padding-bottom: 8px; }
+.feedwrap.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.feedwrap.dropping::after { content: "Drop an image to use it as the face mask"; position: absolute; inset: 0; display: grid;
+  place-items: center; background: rgba(91, 140, 255, .12); color: var(--fg); font-weight: 550; pointer-events: none; }
+img.maskpreview { width: 34px; height: 34px; border-radius: 8px; object-fit: cover; border: 1px solid var(--line); cursor: pointer; }
+img.maskpreview:hover { border-color: var(--blur); }
+
+/* ---- glasses-first controls ---- */
+input.glasses { width: 210px; }
+.controls .or { color: var(--faint); font-size: 12px; padding: 0 2px; }
+select.quiet, button.quiet { color: var(--muted); background: transparent; border-color: var(--line-soft); font-size: 12.5px; }
+select.quiet:hover, button.quiet:hover { color: var(--fg); border-color: var(--line); }
+
+/* ---- one-line source row, floating stop ---- */
+.controls { flex-wrap: wrap; row-gap: 10px; }
+.controls > * { flex: none; }
+input.glasses { width: 168px; }
+details.setup > .controls { flex-wrap: wrap; }
+button.stop.float { position: absolute; top: 14px; right: 14px; z-index: 2; padding: 7px 14px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: #fff; background: rgba(255, 93, 115, .85); border: 1px solid rgba(255, 255, 255, .15);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 2px 12px rgba(0, 0, 0, .35); }
+button.stop.float::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: #fff; margin-right: 8px; vertical-align: 0; }
+button.stop.float:hover { background: var(--blur); border-color: rgba(255, 255, 255, .3); }
+.maskgroup { display: inline-flex; align-items: center; gap: 6px; }
 /* ---- notice popups over the feed (filmed → notified, with the on-chain links) ---- */
 .toasts { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px;
   pointer-events: none; z-index: 2; }
@@ -176,3 +203,7 @@ code { font-family: var(--mono); background: var(--card-2); padding: 1px 5px; bo
 @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 .event .name { color: var(--fg); }
+
+/* toasts and the floating Stop pill share the feed's top edge: leave the pill its corner */
+.toasts { right: 112px; }
+button.stop.float { z-index: 3; }
