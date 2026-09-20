@@ -22,7 +22,14 @@ export const flags = {
   FILM_EVENT_ENDPOINT: env.VITE_FILM_EVENT_ENDPOINT ?? "http://localhost:8787/film-event", // "" ⇒ local log only
   SERVICE_TOKEN: env.VITE_SERVICE_TOKEN ?? "", // must match the service's SERVICE_TOKEN when set
   SERVICE_WS_URL: env.VITE_SERVICE_WS_URL ?? "ws://localhost:8787/operator", // alerts + attestations feed
+  // a decoded badge with no record ⇒ ask the service to register it as opt_out (its card then appears)
+  AUTO_REGISTER_UNKNOWN: (env.VITE_AUTO_REGISTER ?? "1") !== "0",
   FILM_EVENT_DEBOUNCE_MS: 5000,
+  // The camera as the badge's radio bridge: when the light's consent flag
+  // disagrees with the chain, send the badge's CNSR request to the service.
+  OPTICAL_REQUESTS: (env.VITE_OPTICAL_REQUESTS ?? "1") !== "0",
+  REQUEST_STABLE_MS: 1500, // the flag must read the same for this long (a button press mid-frame is not a request)
+  REQUEST_MIN_INTERVAL_MS: 8000, // per badge; a stale nonce/409 is simply retried next interval
 
   // owned by A — shared contract value
   BEACON_SYMBOL_HZ: 10,
@@ -32,6 +39,8 @@ export const flags = {
   // exercises). VITE_BEACON_DECODER=stub gives two fixed fake beacons — a
   // no-badge fallback only, never for judges. The header button flips it live.
   BEACON_DECODER: (env.VITE_BEACON_DECODER ?? "optical") as "stub" | "optical",
+  // draw what the decoder sees on the feed (candidate patches, luma, bits, decoded ids)
+  BEACON_DEBUG: (env.VITE_BEACON_DEBUG ?? "1") !== "0",
   BEACON_BRIGHT_T: 175, // 0..255 threshold for the localization mask
   BEACON_MIN_BORDER: 110, // min border luma for a confident sample (real screen ≈ 190-210)
   BEACON_ASPECT_MIN: 1.0, // patch aspect = 320/240 = 1.33 (full screen, was 2.3)
@@ -46,7 +55,10 @@ export const flags = {
   // never confirm twice and every badge stayed blurred forever.
 
   // vision/perf (mine)
-  PROCESS_WIDTH: 720, // detection + decode input width; higher = badges decode from farther (costs CPU)
+  // detection + decode input width; higher = badges decode from farther (costs CPU).
+  // The badge patch must be ≥ BEACON_MIN_W px wide here: at 720 that is roughly
+  // ≤ 1 m from a laptop webcam, at 1280 about ≤ 1.8 m. Live-switchable in the UI.
+  PROCESS_WIDTH: Number(env.VITE_PROCESS_WIDTH ?? 720),
   DISPLAY_MAX_WIDTH: 960, // composited output width cap
   IOU_MATCH: 0.3, // tracker match threshold
   TRACK_MAX_MISSED: 10, // frames to hold a blur through occlusion (~0.6s @15fps)

@@ -6,6 +6,7 @@ import { Tracker } from "../src/vision/track";
 import { associate } from "../src/vision/associate";
 import { decide } from "../src/consent/decide";
 import type { Consent, Track } from "../src/shared/schema";
+import { flags as flagsT } from "../src/config/flags";
 
 // 1) tracker keeps the same id across a small move
 const tr = new Tracker();
@@ -28,7 +29,20 @@ decide(tracks, get, 1000);
 assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, false, "opt_in ⇒ clear");
 assert.equal(tracks.find((t) => t.trackId === "L")!.blurred, true, "no beacon ⇒ blur");
 
-console.log("ok — tracker identity, association, fail-safe blur");
+// 3b) the badge's own flag can only add privacy: OPT-OUT on the light forces a blur even on chain opt_in,
+//     OPT-IN on the light never clears without the chain
+associate(tracks, [{ beaconId: "X", imagePosition: { x: 0.65, y: 0.7 }, confidence: 1, optIn: false }], 1000);
+decide(tracks, get, 1000);
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, true, "badge says OPT-OUT ⇒ blur even though chain says opt_in");
+associate(tracks, [{ beaconId: "X", imagePosition: { x: 0.65, y: 0.7 }, confidence: 1, optIn: true }], 1000);
+decide(tracks, get, 1000);
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, false, "badge OPT-IN + chain opt_in ⇒ clear");
+decide(tracks, () => "opt_out", 1000);
+assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, true, "badge OPT-IN alone never clears: the chain decides");
+decide(tracks, get, 1000 + flagsT.BIND_TTL_MS + 1);
+assert.equal(tracks.find((t) => t.trackId === "R")!.beaconOptIn, undefined, "an expired binding drops the light's bit too");
+
+console.log("ok — tracker identity, association, fail-safe blur, light flag only adds privacy");
 
 // 4) chain cache semantics (no network: autoFetch off, synthetic snapshots)
 import { ChainConsentCache } from "../src/consent/chainCache";

@@ -54,5 +54,6 @@ export function associate(tracks: Track[], beacons: BeaconReading[], nowMs: numb
     usedTrack.add(p.t);
     p.t.beaconId = p.b.beaconId;
     p.t.boundAtMs = nowMs;
+    p.t.beaconOptIn = p.b.optIn; // what the wearer's badge says; restrict-only in decide()
   }
 }

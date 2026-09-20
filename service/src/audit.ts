@@ -153,6 +153,42 @@ export class AuditLog {
     return { head: toHex(head), count: this.batches.length, mismatches, unanchored: this.unanchored().length };
   }
 
+  /**
+   * Self-heal after a crash between "transaction landed" and `recordBatch`
+   * (Ctrl+C mid-confirmation): the chain is then ahead of this log by the
+   * batches that were in flight. The only things the service could have
+   * submitted are heartbeats (zero commitment) or one batch of the entries
+   * that are still unanchored, in log order — so try those sequences, and if
+   * one reproduces the on-chain head, record it. Returns how many batches were
+   * recovered (0 ⇒ nothing to do, or a genuine mismatch that stays reported).
+   */
+  recover(onChain: { head: string; count: number }, maxGap = 3): number {
+    const local = this.expectedHead();
+    const gap = onChain.count - local.count;
+    if (local.mismatches.length || gap <= 0 || gap > maxGap) return 0;
+    const unanchored = this.unanchored().map((e) => e.eventId);
+    const candidates: string[][][] = [Array.from({ length: gap }, () => [])];
+    if (unanchored.length) {
+      for (let pos = 0; pos < gap; pos++) {
+        const seq = Array.from({ length: gap }, () => [] as string[]);
+        seq[pos] = unanchored;
+        candidates.push(seq);
+      }
+    }
+    for (const seq of candidates) {
+      let head = fromHex(local.head);
+      const steps = seq.map((ids) => {
+        const c = batchCommitment(ids.map((id) => fromHex(this.byId.get(id)!.hash)));
+        head = rollHead(head, c);
+        return { ids, commitment: toHex(c), head: toHex(head) };
+      });
+      if (steps[steps.length - 1].head !== onChain.head) continue;
+      for (const st of steps) this.recordBatch({ eventIds: st.ids, commitment: st.commitment, head: st.head, signature: "(recovered: landed before the last shutdown)", at: Date.now() });
+      return steps.length;
+    }
+    return 0;
+  }
+
   /** Compare the local recomputation to what the chain says. */
   verify(onChain: { head: string; count: number }): { ok: boolean; complete: boolean; local: HeadCheck; onChain: typeof onChain } {
     const local = this.expectedHead();
