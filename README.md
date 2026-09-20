@@ -127,7 +127,7 @@ Then, in order:
    first): the badge is then unregistered ⇒ always blurred until it is seen
    again and auto-registered.
 4. **Film event → notice** — with an opted-out badge on camera (`271` on the
-   screen = Nehad, `86D` = Hashim; the two demo contacts live in
+   screen = Nehad, `86D` = Hashim, `4A6` = Maaz; the demo contacts live in
    `data/demo/seed-consents.json`): a popup over the feed says *Nehad Shikh
    Trab was filmed at 12:01:03 — recording on Solana…*, turns into *has been
    notified — email sent to n•••@gmail.com* a few seconds later, and links
