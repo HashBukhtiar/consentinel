@@ -18,13 +18,13 @@ const tracks: Track[] = [
   { trackId: "L", bbox: { x: 0.2, y: 0.2, w: 0.2, h: 0.2 }, consent: "unknown", blurred: true, missed: 0 },
   { trackId: "R", bbox: { x: 0.6, y: 0.2, w: 0.2, h: 0.2 }, consent: "unknown", blurred: true, missed: 0 },
 ];
-associate(tracks, [{ beaconId: "X", imagePosition: { x: 0.65, y: 0.7 }, confidence: 1 }]);
+associate(tracks, [{ beaconId: "X", imagePosition: { x: 0.65, y: 0.7 }, confidence: 1 }], 1000);
 assert.equal(tracks.find((t) => t.trackId === "R")!.beaconId, "X", "binds to nearest face above");
 assert.equal(tracks.find((t) => t.trackId === "L")!.beaconId, undefined);
 
 // 3) fail-safe: only explicit opt_in clears
 const get = (id: string): Consent => (id === "X" ? "opt_in" : "unknown");
-decide(tracks, get);
+decide(tracks, get, 1000);
 assert.equal(tracks.find((t) => t.trackId === "R")!.blurred, false, "opt_in ⇒ clear");
 assert.equal(tracks.find((t) => t.trackId === "L")!.blurred, true, "no beacon ⇒ blur");
 

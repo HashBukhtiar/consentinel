@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "tsx test/logic.test.ts && tsx test/decode.test.ts",
+    "test": "tsx test/safety.test.ts && tsx test/logic.test.ts && tsx test/decode.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -2,7 +2,7 @@ import { FaceDetector } from "@mediapipe/tasks-vision";
 import { createDetector, detectFaces } from "../vision/detect";
 import { Tracker } from "../vision/track";
 import { associate } from "../vision/associate";
-import { pixelate } from "../vision/blur";
+import { pixelateAll, clearWindow } from "../vision/blur";
 import { decide } from "../consent/decide";
 import { FilmEmitter } from "../events/filmEvent";
 import { decodeBeacons as stubDecode } from "../stubs/decodeBeacons";
@@ -95,13 +95,20 @@ export class Pipeline {
         flags.BEACON_DECODER === "optical"
           ? opticalDecode(imageData, tMs, sampleRegion)
           : stubDecode(imageData, tMs));
-      traceStage("associate", () => associate(tracks, beacons));
-      traceStage("decide", () => decide(tracks, getConsent)); // sync read of the Solana-synced cache
+      traceStage("associate", () => associate(tracks, beacons, tMs));
+      traceStage("decide", () => decide(tracks, getConsent, tMs)); // sync read of the Solana-synced cache
       traceStage("blur+notify", () => {
+        // DEFAULT DENY, as a composite: pixelate the WHOLE frame, then punch
+        // clear windows only for faces with an explicit opt_in. A face the
+        // detector never found (profile, motion blur, far, dark) therefore
+        // stays covered instead of rendering in full clarity.
+        pixelateAll(dctx, flags.PIXELATE_SIZE);
         for (const t of tracks) {
-          if (t.blurred) {
-            const px = clampBox(t.bbox, dispW, dispH, flags.BLUR_PAD);
-            pixelate(dctx, px.x, px.y, px.w, px.h, flags.PIXELATE_SIZE);
+          // missed > 0 ⇒ this bbox is a stale guess carried from an earlier
+          // frame. Clearing there could reveal whoever has moved into it, so
+          // a track we lost sight of this frame gets no window.
+          if (!t.blurred && t.missed === 0) {
+            clearWindow(dctx, v, v.videoWidth, v.videoHeight, t.bbox, flags.CLEAR_INSET);
           }
           if (t.beaconId && t.consent === "opt_out") this.emitter.maybeEmit(t.beaconId);
         }
@@ -135,15 +142,4 @@ export class Pipeline {
     }
     for (const id of [...this.lastLogged.keys()]) if (!live.has(id)) this.lastLogged.delete(id);
   }
-}
-
-// normalized bbox → padded, clamped device-px box
-function clampBox(b: Track["bbox"], W: number, H: number, pad: number) {
-  let x = (b.x - (b.w * pad) / 2) * W;
-  let y = (b.y - (b.h * pad) / 2) * H;
-  let w = b.w * (1 + pad) * W;
-  let h = b.h * (1 + pad) * H;
-  x = Math.max(0, x); y = Math.max(0, y);
-  w = Math.min(w, W - x); h = Math.min(h, H - y);
-  return { x, y, w, h };
 }

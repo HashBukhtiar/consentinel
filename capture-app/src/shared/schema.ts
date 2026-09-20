@@ -16,7 +16,8 @@ export interface BeaconReading {
 export interface Track {
   trackId: string;
   bbox: { x: number; y: number; w: number; h: number }; // normalized [0,1]
-  beaconId?: string; // sticky once associated; persists through brief occlusion
+  beaconId?: string; // set by associate(); EXPIRES — see flags.BIND_TTL_MS
+  boundAtMs?: number; // when beaconId was last (re)confirmed by a sighting
   consent: Consent;
   blurred: boolean;
   missed: number; // frames since last detection (drives occlusion persistence)
