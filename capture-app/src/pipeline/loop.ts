@@ -2,7 +2,7 @@ import { FaceDetector } from "@mediapipe/tasks-vision";
 import { createDetector, detectFaces } from "../vision/detect";
 import { Tracker } from "../vision/track";
 import { associate } from "../vision/associate";
-import { pixelateAll, clearWindow } from "../vision/blur";
+import { pixelate, pixelateAll, clearWindow } from "../vision/blur";
 import { decide } from "../consent/decide";
 import { FilmEmitter } from "../events/filmEvent";
 import { consentRequester } from "../events/consentRequest";
@@ -120,20 +120,30 @@ export class Pipeline {
       // the badge's A button, over light: relay a consent bit that disagrees with the chain (debounced, fire-and-forget)
       traceStage("request", () => { for (const b of beacons) if (b.optIn !== undefined) consentRequester.observe(b.beaconId, b.optIn, getConsent(b.beaconId)); });
       traceStage("blur+notify", () => {
-        // DEFAULT DENY, as a composite: pixelate the WHOLE frame, then punch
-        // clear windows only for faces with an explicit opt_in. A face the
-        // detector never found (profile, motion blur, far, dark) therefore
-        // stays covered instead of rendering in full clarity.
-        pixelateAll(dctx, flags.PIXELATE_SIZE);
-        for (const t of tracks) {
-          // missed > 0 ⇒ this bbox is a stale guess carried from an earlier
-          // frame. Clearing there could reveal whoever has moved into it, so
-          // a track we lost sight of this frame gets no window.
-          if (!t.blurred && t.missed === 0) {
-            clearWindow(dctx, v, v.videoWidth, v.videoHeight, t.bbox, flags.CLEAR_INSET);
+        if (flags.COMPOSITE === "frame") {
+          // DEFAULT DENY, as a composite: pixelate the WHOLE frame, then punch
+          // clear windows only for faces with an explicit opt_in. A face the
+          // detector never found (profile, motion blur, far, dark) therefore
+          // stays covered instead of rendering in full clarity.
+          pixelateAll(dctx, flags.PIXELATE_SIZE);
+          for (const t of tracks) {
+            // missed > 0 ⇒ this bbox is a stale guess carried from an earlier
+            // frame. Clearing there could reveal whoever has moved into it, so
+            // a track we lost sight of this frame gets no window.
+            if (!t.blurred && t.missed === 0) {
+              clearWindow(dctx, v, v.videoWidth, v.videoHeight, t.bbox, flags.CLEAR_INSET);
+            }
           }
-          if (t.beaconId && t.consent === "opt_out") this.emitter.maybeEmit(t.beaconId);
+        } else {
+          // FACES ONLY: the classic look — pixelate each detected face that is
+          // not opt_in, padded outward. Faces the detector misses are shown.
+          for (const t of tracks) {
+            if (!t.blurred) continue;
+            const px = clampBox(t.bbox, dispW, dispH, flags.BLUR_PAD);
+            pixelate(dctx, px.x, px.y, px.w, px.h, flags.PIXELATE_SIZE);
+          }
         }
+        for (const t of tracks) if (t.beaconId && t.consent === "opt_out") this.emitter.maybeEmit(t.beaconId);
       });
       return tracks;
     };
@@ -165,6 +175,17 @@ export class Pipeline {
     }
     for (const id of [...this.lastLogged.keys()]) if (!live.has(id)) this.lastLogged.delete(id);
   }
+}
+
+// normalized bbox → padded, clamped device-px box ("faces" composite)
+function clampBox(b: Track["bbox"], W: number, H: number, pad: number) {
+  let x = (b.x - (b.w * pad) / 2) * W;
+  let y = (b.y - (b.h * pad) / 2) * H;
+  let w = b.w * (1 + pad) * W;
+  let h = b.h * (1 + pad) * H;
+  x = Math.max(0, x); y = Math.max(0, y);
+  w = Math.min(w, W - x); h = Math.min(h, H - y);
+  return { x, y, w, h };
 }
 
 // ~1k pixels sampled on a stride, folded into a 32-bit hash. Identical bytes for

@@ -22,7 +22,7 @@ function askToEnrol(id: string): void {
       if (!r.ok) { chain?.note("error", `${id}: organizer service could not enrol it — ${j.error ?? r.status}`, id); return; }
       if (j.created) {
         chain?.note("tx", `${id} seen for the first time → auto-registered as opt_out by the organizer`, id, j.signature);
-        void chain?.syncNow();
+        void chain?.syncNow(true); // a new account: needs the discovery scan, not just a refresh
       } else if (!j.registered) chain?.note("info", `${id}: ${j.note ?? "not registered"}`, id);
     })
     .catch(() => { /* service offline: stays unknown ⇒ blur */ });

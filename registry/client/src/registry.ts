@@ -217,6 +217,33 @@ export class ConsentRegistryClient {
     return snap;
   }
 
+  /**
+   * One cheap RPC (getMultipleAccounts, ≤100 per call) for accounts we already
+   * know: refreshes them and reports the ones that no longer exist (closed).
+   * The public devnet endpoint rate-limits getProgramAccounts hard ("Too many
+   * requests for a specific RPC call"); a cache that discovers with fetchAll()
+   * every ~30 s and refreshes with this every few seconds stays under it.
+   */
+  async fetchAccounts(addresses: PublicKey[]): Promise<{ snap: RegistrySnapshot; closed: PublicKey[] }> {
+    const snap: RegistrySnapshot = { registry: null, consents: [], overrides: [], cameras: [], slot: 0 };
+    const closed: PublicKey[] = [];
+    for (let i = 0; i < addresses.length; i += 100) {
+      const chunk = addresses.slice(i, i + 100);
+      const res = await this.connection.getMultipleAccountsInfoAndContext(chunk, this.commitment);
+      snap.slot = Math.max(snap.slot, res.context.slot);
+      res.value.forEach((account, k) => {
+        const pubkey = chunk[k];
+        if (!account) { closed.push(pubkey); return; }
+        const d = account.data.subarray(0, 8);
+        if (bytesEqual(d, this.disc.consent)) snap.consents.push(this.decodeConsent(pubkey, account.data));
+        else if (bytesEqual(d, this.disc.override)) snap.overrides.push(this.decodeOverride(pubkey, account.data));
+        else if (bytesEqual(d, this.disc.camera)) snap.cameras.push(this.decodeCamera(pubkey, account.data));
+        else if (bytesEqual(d, this.disc.registry)) snap.registry = this.decodeRegistry(pubkey, account.data);
+      });
+    }
+    return { snap, closed };
+  }
+
   decodeRegistry(address: PublicKey, data: Buffer): RegistryView {
     const r = this.coder.accounts.decode("Registry", data);
     return { issuer: (r.issuer as PublicKey).toBase58(), registrations: num(r.registrations), address: address.toBase58() };

@@ -27,6 +27,8 @@ export function App() {
   const [source, setSource] = useState("—");
   const [decoder, setDecoder] = useState<"stub" | "optical">(flags.BEACON_DECODER);
   const [overlay, setOverlay] = useState(flags.BEACON_DEBUG);
+  const [composite, setComposite] = useState<"frame" | "faces">(flags.COMPOSITE);
+  function toggleComposite() { flags.COMPOSITE = flags.COMPOSITE === "frame" ? "faces" : "frame"; setComposite(flags.COMPOSITE); }
   const [procWidth, setProcWidth] = useState(flags.PROCESS_WIDTH);
   const [error, setError] = useState("");
 
@@ -120,6 +122,9 @@ export function App() {
         <button onClick={startSyntheticBadge}>Synthetic badge</button>
         <button onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")} title="stub = fixed fake beacons · optical = decode the real badge">
           beacon: {decoder}
+        </button>
+        <button onClick={toggleComposite} title="whole frame = default deny: everything pixelated, clear windows only for opt-in faces (an undetected face stays covered) · faces only = classic look, only detected non-consenting faces are pixelated">
+          blur: {composite === "frame" ? "whole frame" : "faces only"}
         </button>
         <button onClick={toggleOverlay} title="draw what the decoder sees: candidate patches (red = not confident, yellow = reading), decoded ids (green), face boxes">
           overlay: {overlay ? "on" : "off"}

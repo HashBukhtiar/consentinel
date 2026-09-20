@@ -14,7 +14,14 @@ export const flags = {
   CONSENT_SOURCE: (env.VITE_CONSENT_SOURCE ?? "chain") as "chain" | "stub",
   SOLANA_CLUSTER: cluster,
   SOLANA_RPC_URL: env.VITE_SOLANA_RPC_URL ?? (cluster === "localnet" ? "http://127.0.0.1:8899" : "https://api.devnet.solana.com"),
-  CONSENT_CACHE_SYNC_MS: 3000, // poll backstop; websocket pushes land faster
+  // Poll cadence. Every SYNC_MS the cache refreshes the accounts it already
+  // knows with ONE cheap getMultipleAccounts call; only every DISCOVER_MS does it
+  // run getProgramAccounts to find new records (the public devnet RPC throttles
+  // that call: "429 Too many requests for a specific RPC call"). New records
+  // also arrive sooner via the log push and via the on-demand fetch of an
+  // unknown id. A 429 backs the poll off (up to 30 s); pushes keep it fresh.
+  CONSENT_CACHE_SYNC_MS: 3000,
+  CONSENT_CACHE_DISCOVER_MS: 30_000,
   // If neither a poll nor a push succeeded within this window the cache is
   // no longer authoritative: every beacon reads as "unknown" ⇒ blur (fail-safe).
   CONSENT_STALE_MS: 60_000,
@@ -63,6 +70,15 @@ export const flags = {
   IOU_MATCH: 0.3, // tracker match threshold
   TRACK_MAX_MISSED: 10, // frames to hold a blur through occlusion (~0.6s @15fps)
   PIXELATE_SIZE: 14, // block size in px; bigger = blockier
+  // How the blur is composited (header button flips it live):
+  //   "frame": DEFAULT DENY — the whole frame is pixelated and clear windows are
+  //            punched out only for opt_in faces (DECISIONS.md §2.6); a face the
+  //            detector never found is still covered.
+  //   "faces": pixelate only detected faces that are not opt_in (padded outward).
+  //            Looks like a normal video with blurred people; an undetected face
+  //            is shown clear. The privacy story is weaker; the picture is nicer.
+  COMPOSITE: (env.VITE_COMPOSITE ?? "frame") as "frame" | "faces",
+  BLUR_PAD: 0.35, // "faces" mode: pad each blurred bbox outward — fail-safe covers more, never less
 
   // ---- default-deny composite + binding guards (see DECISIONS.md §4) ------
   // The frame is pixelated WHOLE and clear windows are punched out only for

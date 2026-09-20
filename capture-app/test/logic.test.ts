@@ -93,6 +93,21 @@ assert.equal(cache.get("C3D4"), "unknown", "stale cache ⇒ unknown ⇒ blur (op
 cache.applyLogs({ signature: "s6", slot: 107, err: null, events: [] });
 assert.equal(cache.get("C3D4"), "opt_in", "a fresh push restores authority");
 
+// 4b) partial refresh (getMultipleAccounts path): updates + closes only what it queried
+{
+  const c2 = new ChainConsentCache("http://127.0.0.1:8899", { autoFetch: false, cluster: "localnet", now: () => clock });
+  c2.applySnapshot({ registry: null, consents: [rec("1A", true, 0, "o1"), rec("2B", false, 0, "o2")], overrides: [], cameras: [], slot: 100 });
+  c2.status.freshAt = clock; // applySnapshot alone doesn't stamp freshness; syncNow does
+  // a partial that only mentions 1A must NOT drop 2B
+  c2.applyPartial({ registry: null, consents: [{ ...rec("1A", false, 1, "o1") }], overrides: [], cameras: [], slot: 101 });
+  assert.equal(c2.get("1A"), "opt_out", "partial refresh updates the queried record");
+  assert.equal(c2.get("2B"), "opt_out", "partial refresh leaves unqueried records alone");
+  // an older partial cannot overwrite a newer state
+  c2.applyPartial({ registry: null, consents: [{ ...rec("1A", true, 0, "o1") }], overrides: [], cameras: [], slot: 90 });
+  assert.equal(c2.get("1A"), "opt_out", "stale partial is ignored (slot-ordered)");
+  console.log("ok — chain cache partial refresh: targeted update, no collateral drops, slot-ordered");
+}
+
 console.log("ok — chain cache: fail-safe unknown, slot ordering, owner-checked overrides, tombstones, staleness");
 
 // 5) stub fallback normalizes beacon ids like the chain cache does
