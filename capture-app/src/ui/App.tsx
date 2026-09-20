@@ -6,7 +6,7 @@ import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
 import { chain, startConsent } from "../consent/store";
 import type { BeaconDebug } from "../decode/beacon";
-import { captureDiagnostic, sendDiagnostic } from "../diag/snapshot";
+import { captureDiagnostic, sendDiagnostic, captureSequence, sendSequence } from "../diag/snapshot";
 import type { BeaconReading, FilmEvent, Track } from "../shared/schema";
 
 const PROC_WIDTHS = [480, 720, 960, 1280];
@@ -42,6 +42,16 @@ export function App() {
     setDiag("capturing 1.2 s…");
     try { setDiag(await sendDiagnostic(await captureDiagnostic(v, flags.PROCESS_WIDTH, beacons, tracks))); }
     catch (e) { setDiag(`diag failed: ${(e as Error).message}`); }
+  }
+  // 4 s of raw frames for an offline replay of the real decoder (scripts/replay.ts).
+  async function record() {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) { setDiag("start a camera/clip first"); return; }
+    try {
+      const seq = await captureSequence(v, 4, 20, 1280, (n) => setDiag(`recording… ${n} frames`));
+      setDiag(`uploading ${seq.frames.length} frames…`);
+      setDiag(await sendSequence(seq));
+    } catch (e) { setDiag(`record failed: ${(e as Error).message}`); }
   }
   function toggleOverlay() { flags.BEACON_DEBUG = !flags.BEACON_DEBUG; setOverlay(flags.BEACON_DEBUG); }
   function setWidth(w: number) { flags.PROCESS_WIDTH = w; setProcWidth(w); } // the loop reads it every frame
@@ -143,6 +153,7 @@ export function App() {
           {PROC_WIDTHS.map((w) => <option key={w} value={w}>{w}px</option>)}
         </select>
         <button onClick={snapshot} title="save what the camera sees (full frame + badge crops + classifier numbers) to the service's data/diag/ for offline debugging">📸 diag</button>
+        <button onClick={record} title="record 4 s of frames to the service's data/diag/ so the real decoder can be replayed on them offline (scripts/replay.ts)">🎥 4s</button>
         <label className="file">Load clip
           <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) begin(null, URL.createObjectURL(f), "Clip · fallback"); }} />
         </label>

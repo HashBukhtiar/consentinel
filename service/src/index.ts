@@ -7,6 +7,7 @@
 //   GET  /badge/:id/consent       badge reads its own on-chain state (+ nonce/instance/serverTime to sign)
 //   POST /badge/:id/seen          capture app saw an id with no record → issuer auto-registers it as opt_out (Bearer SERVICE_TOKEN if set)
 //   POST /diag                    capture app's 📸 diag: frame + badge crops + classifier numbers → data/diag/ (Bearer SERVICE_TOKEN if set)
+//   POST /diag/seq                capture app's 🎥 4s: a frame sequence → data/diag/<ts>-seq/ for scripts/replay.ts (Bearer SERVICE_TOKEN if set)
 //   POST /consent/delegated       badge-signed consent update, relayed on-chain (signature-verified; open)
 //   GET  /audit/events?badge=A1B2 the off-chain log (Bearer SERVICE_TOKEN if set) — for the audit layer
 //   GET  /audit/verify            local log recomputed vs on-chain head (hashes only; open)
@@ -243,6 +244,25 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (p === "/film-event" && req.method === "POST") {
       if (!authorized(req)) return json(401, { error: "missing or wrong bearer token" });
       return json(202, await handleFilmEvent(await readJson(req, res)));
+    }
+    if (p === "/diag/seq" && req.method === "POST") {
+      if (!authorized(req)) return json(401, { error: "missing or wrong bearer token" });
+      let d: any;
+      try { d = JSON.parse(await readBody(req, res, 80_000_000)); } catch { if (res.headersSent) return; return json(400, { error: "invalid JSON" }); }
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const dir = join(config.DIAG_DIR, `${ts}-seq`);
+      mkdirSync(dir, { recursive: true });
+      const index: { tMs: number; file: string }[] = [];
+      for (const [i, f] of (Array.isArray(d.frames) ? d.frames : []).entries()) {
+        const m = typeof f?.jpeg === "string" ? /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(f.jpeg) : null;
+        if (!m) continue;
+        const name = `${String(i).padStart(3, "0")}.jpg`;
+        writeFileSync(join(dir, name), Buffer.from(m[1], "base64"));
+        index.push({ tMs: Number(f.tMs) || 0, file: name });
+      }
+      writeFileSync(join(dir, "index.json"), JSON.stringify({ at: d.at, video: d.video, width: d.width, procW: d.procW, frames: index }, null, 2));
+      log(`diag sequence saved → ${dir} (${index.length} frames over ${index.length ? index[index.length - 1].tMs : 0} ms, ${d.width}px wide) · replay: npx tsx scripts/replay.ts ${dir}`);
+      return json(200, { ok: true, dir, frames: index.length });
     }
     if (p === "/diag" && req.method === "POST") {
       if (!authorized(req)) return json(401, { error: "missing or wrong bearer token" });

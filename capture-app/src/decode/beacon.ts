@@ -50,30 +50,49 @@ function boxRGB(f: Frame, cx: number, cy: number, hw: number, hh: number): RGB {
 // Split into scan + reject so the tuning page (tune.html) can show WHY a
 // candidate was thrown away. locatePatches() is the production path and keeps
 // exactly the old behaviour.
-export interface Component { x: number; y: number; w: number; h: number; count: number; aspect: number; fill: number }
+export interface Component {
+  x: number; y: number; w: number; h: number;
+  count: number; aspect: number; fill: number;
+  /** mean RGB of the pixels that formed this component — for a badge, that IS the white ring, whatever its thickness */
+  ref: RGB;
+}
 
 /** Smallest blob worth reporting to a human. Well below BEACON_MIN_W so the
  *  tuner can say "your badge is 14px, the floor is 22" instead of nothing. */
 const DIAG_MIN_W = 6;
 
+// The mask is WHITENESS — min(R,G,B) — not luma. Measured on a real webcam
+// frame (data/diag, 2026-09-20): auto-exposure in a lit room rendered the
+// badge's white ring at luma ~155 with a blue cast [121,169,203], well under
+// a 175 luma gate, while the ceiling light (247) and a grey T-shirt (190)
+// sailed through. Whiteness fixes both directions at once: the ring's darkest
+// channel is still ~120, and every alphabet colour has a channel at ~0, so the
+// interior can NEVER join the ring's component however bright it is. The ring
+// therefore comes out as a hollow component on its own, and the mean colour of
+// that component is the white reference — no assumption about how thick the
+// ring is (the badge as pushed draws it ~3% of the width, not the 7.5% the
+// firmware constants say).
 function scanComponents(f: Frame): Component[] {
   const { width: W, height: H } = f;
   const bright = new Uint8Array(W * H);
   for (let i = 0; i < W * H; i++) {
     const o = i * 4;
-    bright[i] = 0.299 * f.data[o] + 0.587 * f.data[o + 1] + 0.114 * f.data[o + 2] > flags.BEACON_BRIGHT_T ? 1 : 0;
+    const r = f.data[o], g = f.data[o + 1], b = f.data[o + 2];
+    bright[i] = (r < g ? (r < b ? r : b) : (g < b ? g : b)) > flags.BEACON_WHITE_T ? 1 : 0;
   }
   const seen = new Uint8Array(W * H);
   const stack: number[] = [];
   const out: Component[] = [];
   for (let start = 0; start < W * H; start++) {
     if (!bright[start] || seen[start]) continue;
-    let minX = W, minY = H, maxX = 0, maxY = 0, count = 0;
+    let minX = W, minY = H, maxX = 0, maxY = 0, count = 0, sr = 0, sg = 0, sb = 0;
     stack.push(start); seen[start] = 1;
     while (stack.length) {
       const p = stack.pop()!;
       const x = p % W, y = (p / W) | 0;
       count++;
+      const o = p * 4;
+      sr += f.data[o]; sg += f.data[o + 1]; sb += f.data[o + 2];
       if (x < minX) minX = x; if (x > maxX) maxX = x;
       if (y < minY) minY = y; if (y > maxY) maxY = y;
       if (x > 0 && bright[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack.push(p - 1); }
@@ -83,7 +102,7 @@ function scanComponents(f: Frame): Component[] {
     }
     const w = maxX - minX + 1, h = maxY - minY + 1;
     if (w < DIAG_MIN_W) continue;
-    out.push({ x: minX, y: minY, w, h, count, aspect: w / h, fill: count / (w * h) });
+    out.push({ x: minX, y: minY, w, h, count, aspect: w / h, fill: count / (w * h), ref: [sr / count, sg / count, sb / count] });
   }
   return out;
 }
@@ -98,10 +117,12 @@ export function rejectReason(c: Component, frameW: number): string | null {
   return null;
 }
 
-function locatePatches(f: Frame): Box[] {
+type Patch = Box & { ref: RGB };
+
+function locatePatches(f: Frame): Patch[] {
   return scanComponents(f)
     .filter((c) => rejectReason(c, f.width) === null)
-    .map((c) => ({ x: c.x, y: c.y, w: c.w, h: c.h }));
+    .map((c) => ({ x: c.x, y: c.y, w: c.w, h: c.h, ref: c.ref }));
 }
 
 // ---- symbol sampling --------------------------------------------------------
@@ -113,10 +134,10 @@ export interface Sampled {
   confident: boolean;
 }
 
-// The always-lit border, as RGB: the brightest of the 4 side midpoints. The
-// ring is uniform, so max-luma is a stable white reference under tilt/noise,
-// and it MUST come from the same frame as the interior — that is the whole
-// mechanism that makes the classifier exposure- and AWB-invariant.
+// Fallback white reference when the caller has no component mean (a bare
+// box from a harness): the brightest of the 4 side midpoints, sampled at the
+// nominal border thickness. Unreliable on the real badge, whose ring is thinner
+// than nominal — prefer the component's own mean (Component.ref).
 function borderRef(f: Frame, bb: Box): RGB {
   const bx = (BORDER_PX / PATCH.w) * bb.w, by = (BORDER_PX / PATCH.h) * bb.h;
   const hw = Math.max(1, bx * 0.4), hh = Math.max(1, by * 0.4);
@@ -131,8 +152,9 @@ function borderRef(f: Frame, bb: Box): RGB {
   return best;
 }
 
-function sampleSymbol(f: Frame, bb: Box): Sampled {
-  const ref = borderRef(f, bb);
+// `ref` = the ring's mean colour from the localizer (same camera frame, same
+// exposure/AWB as the interior — that is what makes the classifier invariant).
+function sampleSymbol(f: Frame, bb: Box, ref: RGB = borderRef(f, bb)): Sampled {
   const bl = lumaOf(ref);
   const px = boxRGB(f,
     bb.x + SAMPLE_BOX_FRAC.fcx * bb.w, bb.y + SAMPLE_BOX_FRAC.fcy * bb.h,
@@ -209,16 +231,16 @@ export interface BeaconDebug {
   height: number;
   candidates: { box: Box; borderLum: number; confident: boolean; symbol: number | null }[];
   tracks: { cx: number; cy: number; lastId: number | null; sinceDecodeMs: number; missed: number }[];
-  bright: number; // fraction of pixels above BEACON_BRIGHT_T (0..1) — ~0 ⇒ too dark / too far
+  bright: number; // fraction of pixels passing the whiteness mask (0..1) — ~0 ⇒ ring too dim / too far
 }
 export let lastDebug: BeaconDebug = { width: 0, height: 0, candidates: [], tracks: [], bright: 0 };
 
-// cheap: sample every 8th pixel
+// cheap: sample every 8th pixel — fraction that passes the whiteness mask
 function brightFraction(f: Frame): number {
   let n = 0, hit = 0;
   for (let i = 0; i < f.width * f.height; i += 8) {
     const o = i * 4;
-    if (0.299 * f.data[o] + 0.587 * f.data[o + 1] + 0.114 * f.data[o + 2] > flags.BEACON_BRIGHT_T) hit++;
+    if (Math.min(f.data[o], f.data[o + 1], f.data[o + 2]) > flags.BEACON_WHITE_T) hit++;
     n++;
   }
   return n ? hit / n : 0;
@@ -245,7 +267,7 @@ class BeaconDecoder {
       // localize on the coarse frame, classify the colour from a native-res crop
       // of just this patch region — the distance de-risk.
       const fine = sampler?.(bb.x / f.width, bb.y / f.height, bb.w / f.width, bb.h / f.height);
-      const s = fine ? sampleSymbol(fine, { x: 0, y: 0, w: fine.width, h: fine.height }) : sampleSymbol(f, bb);
+      const s = fine ? sampleSymbol(fine, { x: 0, y: 0, w: fine.width, h: fine.height }, bb.ref) : sampleSymbol(f, bb, bb.ref);
       dbg.candidates.push({ box: bb, borderLum: s.borderLum, confident: s.confident, symbol: s.symbol });
       if (!s.confident) continue;
       const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;

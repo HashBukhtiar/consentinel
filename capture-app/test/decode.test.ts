@@ -64,7 +64,7 @@ console.log("ok — optical decode: colour mapping, localization, assembly+CRC �
 // grey (what a tiny, blurred badge looks like) can't decode — but a native-res
 // crop of the same region carrying the real colour can. Localize coarse,
 // sample fine: the distance de-risk.
-const GREY: [number, number, number] = [150, 150, 150];
+const GREY: [number, number, number] = [80, 80, 80]; // below BEACON_WHITE_T: stays out of the ring's component
 const coarseGrey = (): ImageData => {
   const data = new Uint8ClampedArray(W * H * 4);
   paintPatch(data, W, H, rect, GREY);

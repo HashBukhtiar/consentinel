@@ -175,7 +175,7 @@ if (process.argv.includes("--tune")) {
   const score = () => HARD.filter((c) => decodes(c)).length;
 
   for (const [key, values] of [
-    ["BEACON_BRIGHT_T", [110, 130, 150, 175, 200]],
+    ["BEACON_WHITE_T", [60, 80, 96, 120, 150]],
     ["BEACON_MIN_BORDER", [80, 95, 110, 130, 160]],
     ["BEACON_SYMBOL_MARGIN", [1.05, 1.15, 1.3, 1.5, 1.8]],
     ["BEACON_MIN_W", [14, 18, 22, 30]],

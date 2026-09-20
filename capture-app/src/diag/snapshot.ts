@@ -94,8 +94,8 @@ export async function captureDiagnostic(video: HTMLVideoElement, procW: number, 
         aspect: +c.aspect.toFixed(2),
         fill: +c.fill.toFixed(3),
         reject: rejectReason(c, procW),
-        coarse: detail(_internal.sampleSymbol(img, { x: c.x, y: c.y, w: c.w, h: c.h })),
-        fine: detail(_internal.sampleSymbol(fine, { x: 0, y: 0, w: dw, h: dh })),
+        coarse: detail(_internal.sampleSymbol(img, { x: c.x, y: c.y, w: c.w, h: c.h }, c.ref)),
+        fine: detail(_internal.sampleSymbol(fine, { x: 0, y: 0, w: dw, h: dh }, c.ref)),
         cropPng: k % 2 === 0 ? crop.toDataURL("image/png") : undefined, // every other sample keeps the payload small
       };
     });
@@ -131,4 +131,54 @@ export async function sendDiagnostic(payload: DiagPayload): Promise<string> {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
   return `saved ${j.files} files → ${j.json?.split("/").pop()} · symbols: ${j.symbols}`;
+}
+
+// ---- 🎥 sequence: what the DECODER sees over time ----------------------------
+// A single frame can only show one symbol; the decoder needs 9 in a row twice.
+// This records `seconds` of frames straight off the video element (no pipeline
+// involvement) so the real decoder can be replayed over them offline:
+//   npx tsx scripts/replay.ts ../data/diag/<ts>-seq
+export interface SeqPayload {
+  at: string;
+  video: { w: number; h: number };
+  width: number; // frames are stored at this width (height keeps the aspect)
+  procW: number;
+  frames: { tMs: number; jpeg: string }[];
+}
+
+export async function captureSequence(video: HTMLVideoElement, seconds = 4, fps = 20, width = 1280, onProgress?: (n: number) => void): Promise<SeqPayload> {
+  const vW = video.videoWidth, vH = video.videoHeight;
+  if (!vW) throw new Error("no video frame yet");
+  const w = Math.min(width, vW), h = Math.round((w * vH) / vW);
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const ctx = c.getContext("2d")!;
+  const frames: SeqPayload["frames"] = [];
+  const t0 = performance.now();
+  const period = 1000 / fps;
+  let next = t0;
+  while (performance.now() - t0 < seconds * 1000) {
+    const now = performance.now();
+    if (now >= next) {
+      next += period;
+      ctx.drawImage(video, 0, 0, w, h);
+      frames.push({ tMs: Math.round(now - t0), jpeg: c.toDataURL("image/jpeg", 0.82) });
+      onProgress?.(frames.length);
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  return { at: new Date().toISOString(), video: { w: vW, h: vH }, width: w, procW: flags.PROCESS_WIDTH, frames };
+}
+
+export async function sendSequence(payload: SeqPayload): Promise<string> {
+  let base: string;
+  try { base = new URL(flags.SERVICE_WS_URL.replace(/^ws/, "http")).origin; } catch { throw new Error("SERVICE_WS_URL is not set"); }
+  const r = await fetch(`${base}/diag/seq`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(flags.SERVICE_TOKEN ? { authorization: `Bearer ${flags.SERVICE_TOKEN}` } : {}) },
+    body: JSON.stringify(payload),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+  return `saved ${j.frames} frames → ${j.dir?.split("/").pop()}`;
 }

@@ -15,7 +15,7 @@ import { ALPHABET, ALPHABET_NAMES } from "@shared/beacon";
 type Knob = { key: keyof typeof flags; min: number; max: number; step: number; help: string };
 
 const KNOBS: Knob[] = [
-  { key: "BEACON_BRIGHT_T", min: 60, max: 250, step: 1, help: "luma above this counts as 'lit' for finding the patch. Too high: badge never found. Too low: the whole room is one blob." },
+  { key: "BEACON_WHITE_T", min: 30, max: 250, step: 1, help: "min(R,G,B) above this counts as 'white ring' for finding the patch (coloured interiors never pass). Too high: badge never found (a lit room reads the ring at ~120). Too low: skin and walls become blobs." },
   { key: "BEACON_MIN_W", min: 8, max: 120, step: 1, help: "smallest patch width in px. Raise to reject noise, lower to decode from farther." },
   { key: "BEACON_ASPECT_MIN", min: 0.6, max: 2.0, step: 0.05, help: "patch is the whole 320x240 screen ⇒ aspect 1.33. Widen if the badge is tilted." },
   { key: "BEACON_ASPECT_MAX", min: 1.0, max: 4, step: 0.05, help: "upper aspect bound." },
@@ -84,7 +84,7 @@ export function Tune() {
       .slice(0, 24)
       .map((c) => {
         const reason = rejectReason(c, W);
-        return { c, reason, s: reason === null ? _internal.sampleSymbol(frame, c) : undefined };
+        return { c, reason, s: reason === null ? _internal.sampleSymbol(frame, c, c.ref) : undefined };
       });
 
     // overlay
@@ -164,7 +164,7 @@ export function Tune() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <tbody>
               {[
-                ["1. bright blobs found", shot.comps.length, "raise BEACON_BRIGHT_T if this is huge"],
+                ["1. bright blobs found", shot.comps.length, "raise BEACON_WHITE_T if this is huge"],
                 ["2. shaped like a patch", shot.accepted, "size/aspect — widen if 0 but you can see the badge"],
                 ["3. confident reads", shot.comps.filter((x) => x.s?.confident).length, "BEACON_MIN_BORDER / SYMBOL_MARGIN"],
                 ["4. symbol changes", stats.symbols, "0 ⇒ patch found but not changing: wrong app or frozen"],

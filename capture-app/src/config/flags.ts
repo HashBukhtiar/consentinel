@@ -48,8 +48,12 @@ export const flags = {
   BEACON_DECODER: (env.VITE_BEACON_DECODER ?? "optical") as "stub" | "optical",
   // draw what the decoder sees on the feed (candidate patches, luma, bits, decoded ids)
   BEACON_DEBUG: (env.VITE_BEACON_DEBUG ?? "1") !== "0",
-  BEACON_BRIGHT_T: 175, // 0..255 threshold for the localization mask
-  BEACON_MIN_BORDER: 110, // min border luma for a confident sample (real screen ≈ 190-210)
+  // Localization mask = WHITENESS: min(R,G,B) > this. Measured on a real webcam
+  // frame in a lit room: the badge's white ring came out [121,169,203] (min 121),
+  // the coloured interior always has a channel near 0, skin ≈ 110-130 (and a
+  // face fails the aspect test anyway), grey cloth ≈ 180+ (rejected by shape).
+  BEACON_WHITE_T: 96,
+  BEACON_MIN_BORDER: 90, // min ring luma for a confident sample (measured 155 in a lit room; a dark room reads 190-210)
   BEACON_ASPECT_MIN: 1.0, // patch aspect = 320/240 = 1.33 (full screen, was 2.3)
   BEACON_ASPECT_MAX: 1.9,
   BEACON_MIN_W: 14, // min patch width in px at PROCESS_WIDTH (decoder floor is ~22; leave headroom)
