@@ -1,5 +1,5 @@
 {
-  "_comment": "Demo seed for the on-chain registry. Badge ids are what the badge key shows (8-bit, two upper-case hex digits; the third digit on the badge screen is the CRC — id 27 shows 271, id 86 shows 86D, id 4A shows 4A6). `consent` is the initial on-chain state; flip it live on stage. Badges not listed here are auto-registered as opt_out by the service the first time a camera sees them. `contact` is the organizer's off-chain directory the notify service uses to tell an opted-out person they were filmed (name for the popup, email for the dry-run mailer) — it never goes on-chain.",
+  "_comment": "Demo seed for the on-chain registry. Badge ids are what the badge key shows (8-bit, two upper-case hex digits; the third digit on the badge screen is the CRC — id 27 shows 271, id 86 shows 86D, id 4A shows 4A6). `consent` is the initial on-chain state; flip it live on stage. Badges not listed here are auto-registered as opt_out by the service the first time a camera sees them. `contact` is the organizer's off-chain directory the notify service uses to tell an opted-out person they were filmed (name for the popup, `email` for the mailer, optional `phone` in E.164 for SMS once a transport exists) — it never goes on-chain. An email only sets the on-chain CHANNEL_EMAIL bit when it actually sends (EMAIL_MODE=send).",
   "cluster": "devnet",
   "cameraLabel": "cam-1",
   "eventId": "htn2026-demo",
@@ -12,17 +12,29 @@
     {
       "badgeId": "A1",
       "consent": false,
-      "label": "second badge (stub/synthetic) — opted OUT (blurred)"
+      "label": "second badge (stub/synthetic) — opted OUT (blurred)",
+      "contact": {
+        "name": "Alex Rivera",
+        "email": "alex.rivera@example.com"
+      }
     },
     {
       "badgeId": "C3",
       "consent": true,
-      "label": "consenting badge (stub/synthetic) — opted IN (clear)"
+      "label": "consenting badge (stub/synthetic) — opted IN (clear)",
+      "contact": {
+        "name": "Casey Tran",
+        "email": "casey.tran@example.com"
+      }
     },
     {
       "badgeId": "3D",
       "consent": false,
-      "label": "physical demo badge (the ID on its screen) — opted OUT (blurred)"
+      "label": "physical demo badge (the ID on its screen) — opted OUT (blurred)",
+      "contact": {
+        "name": "Devin Osei",
+        "email": "devin.osei@example.com"
+      }
     },
     {
       "badgeId": "27",

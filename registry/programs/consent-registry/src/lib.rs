@@ -75,9 +75,15 @@ pub const CAPTURE_SEED: &[u8] = b"capture";
 /// A camera's `filmed_at` may run ahead of the chain clock by at most this (clock skew).
 pub const MAX_CAPTURE_SKEW_SECS: i64 = 5 * 60;
 /// `CaptureNotice.channels` bits: how the person was told.
+///
+/// `record_notice` requires only that the mask is non-zero — it never checks
+/// *which* bits are set — so adding a channel is a client-side change and needs
+/// no program upgrade. These constants are documentation for off-chain code;
+/// nothing in the program reads them.
 pub const CHANNEL_EMAIL: u8 = 1;
 pub const CHANNEL_BADGE_RADIO: u8 = 2;
 pub const CHANNEL_VOICE: u8 = 4;
+pub const CHANNEL_SMS: u8 = 8;
 
 #[program]
 pub mod consent_registry {

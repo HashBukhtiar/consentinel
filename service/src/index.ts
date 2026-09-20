@@ -394,7 +394,13 @@ server.listen(config.PORT, () => {
   console.log(`  radio     bridge ws://localhost:${config.PORT}/bridge · GET /bridge/pending · POST /bridge/uplink  (keys ${config.BADGE_KEYS_DIR}; chain push ${logsSubscribed ? "on" : "off"})`);
   console.log(`  enrol     auto-register first-seen badges as opt_out: ${enroller.enabled ? "on" : "OFF"} (issuer key ${config.ISSUER_KEYPAIR}${existsSync(config.ISSUER_KEYPAIR) ? "" : " — missing"})`);
   const ns = notifier.status();
-  console.log(`  notify    filmed + told on-chain: ${ns.enabled ? "on" : "OFF"} · email ${ns.emailMode} · ${ns.contacts.length} contact(s) in ${config.CONTACTS_FILE}`);
+  console.log(`  notify    filmed + told on-chain: ${ns.enabled ? "on" : "OFF"} · email ${ns.emailMode}${ns.emailReady ? ` via ${config.EMAIL_FROM}` : ` (${ns.emailBlockedBy} — composed + logged, CHANNEL_EMAIL not claimed on-chain)`}${ns.emailRedirectTo ? ` · ALL mail redirected to ${ns.emailRedirectTo} (EMAIL_REDIRECT_TO)` : ""} · ${ns.contacts.length} contact(s) in ${config.CONTACTS_FILE}`);
+  // Whoever runs this next is not necessarily the person whose addresses are in
+  // the contacts file: sending live with no redirect mails those people for real.
+  if (ns.emailReady && !ns.emailRedirectTo) {
+    const real = ns.contacts.filter((c) => c.email && !/@example\.(com|org|net)$/.test(c.email)).length;
+    if (real) console.log(`  !! EMAIL_MODE=send with no EMAIL_REDIRECT_TO — a capture will mail ${real} REAL contact address(es). Set EMAIL_REDIRECT_TO=<your address> to keep it in one inbox.`);
+  }
   if (chain.relayer) {
     chain.conn.getBalance(chain.relayer.publicKey)
       .then((b) => { if (b < 0.01e9) console.log(`  !! relayer balance ${(b / 1e9).toFixed(3)} SOL — fund it or badge-signed updates will fail`); })
