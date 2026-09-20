@@ -10,7 +10,7 @@
 // flags.BEACON_* need ~10 min of tuning against a real badge/recording.
 import { decodeFrame, hex2, FRAME_CELL, SYMBOLS_PER_FRAME, PATCH, BORDER_PX } from "@shared/beacon";
 import type { SymbolSample } from "@shared/beacon";
-import type { BeaconReading, DecodeBeacons } from "../shared/schema";
+import type { BeaconReading } from "../shared/schema";
 import { cellRectFrac } from "./patch";
 import { flags } from "../config/flags";
 
@@ -148,13 +148,21 @@ class FrameAssembler {
 // tracks persist for BEACON_TRACK_MISS frames, exactly like the face tracker.
 type PatchTrack = { cx: number; cy: number; asm: FrameAssembler; missed: number };
 
+// A higher-resolution crop of a normalized [0,1] frame region, supplied by the
+// loop from the source video. Lets us localize cheap (coarse frame) but sample
+// fine (native res) — many more pixels per cell when the badge is far/small.
+export type RegionSampler = (nx: number, ny: number, nw: number, nh: number) => ImageData | null;
+
 class BeaconDecoder {
   private tracks: PatchTrack[] = [];
 
-  decode(f: Frame, tMs: number): BeaconReading[] {
+  decode(f: Frame, tMs: number, sampler?: RegionSampler): BeaconReading[] {
     const unmatched = new Set(this.tracks);
     for (const bb of locatePatches(f)) {
-      const s = sampleCells(f, bb);
+      // localize on the coarse frame, sample cells from a native-res crop of
+      // just this patch region — the distance de-risk.
+      const fine = sampler?.(bb.x / f.width, bb.y / f.height, bb.w / f.width, bb.h / f.height);
+      const s = fine ? sampleCells(fine, { x: 0, y: 0, w: fine.width, h: fine.height }) : sampleCells(f, bb);
       if (!s.confident) continue;
       const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
       let tr = nearest(unmatched, cx, cy, flags.BEACON_MATCH_PX);
@@ -185,7 +193,8 @@ function nearest(set: Iterable<PatchTrack>, cx: number, cy: number, maxPx: numbe
 }
 
 const decoder = new BeaconDecoder();
-export const decodeBeacons: DecodeBeacons = (frame, tMs) => decoder.decode(frame, tMs);
+export const decodeBeacons = (frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] =>
+  decoder.decode(frame, tMs, sampler);
 
 // exported for the self-check
-export const _internal = { locatePatches, sampleCells };
+export const _internal = { locatePatches, sampleCells, newDecoder: () => new BeaconDecoder() };
