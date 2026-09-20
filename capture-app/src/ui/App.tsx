@@ -24,6 +24,13 @@ export function App() {
 
   function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }
   const [privacyBlur, setPrivacyBlur] = useState(flags.PRIVACY_BLUR);
+  const [composite, setComposite] = useState(flags.COMPOSITE);
+  const [unknownPolicy, setUnknownPolicy] = useState(flags.DEFAULT_CONSENT);
+  function toggleUnknown() { flags.DEFAULT_CONSENT = flags.DEFAULT_CONSENT === "blur" ? "clear" : "blur"; setUnknownPolicy(flags.DEFAULT_CONSENT); }
+  // frame = default-deny (whole frame pixelated, clear windows punched for opt-ins);
+  // faces = pixelate only the faces we decided to blur. faces makes the pipeline's
+  // state legible while setting up — frame is the one that is actually fail-safe.
+  function toggleComposite() { flags.COMPOSITE = flags.COMPOSITE === "frame" ? "faces" : "frame"; setComposite(flags.COMPOSITE); }
   function toggleBlur() { flags.PRIVACY_BLUR = !flags.PRIVACY_BLUR; setPrivacyBlur(flags.PRIVACY_BLUR); }
 
   useEffect(() => { listCameras().then(setCameras).catch(() => {}); }, [running]);
@@ -100,6 +107,14 @@ export function App() {
             <button className={"seg " + (privacyBlur ? "optical" : "")} onClick={toggleBlur}
               title="on = pixelate everyone without an opt-in badge · off = show the raw feed (setup only)">
               Blur · {privacyBlur ? "on" : "off"}
+            </button>
+            <button className={"seg " + (composite === "frame" ? "optical" : "")} onClick={toggleComposite}
+              title="frame = default-deny, whole frame blurred except opt-ins · faces = blur only the faces judged non-consenting (setup/debug)">
+              Cover · {composite}
+            </button>
+            <button className={"seg " + (unknownPolicy === "blur" ? "optical" : "")} onClick={toggleUnknown}
+              title="what a face with no usable consent record gets · blur = default-deny (fail-safe) · clear = only recognized opt-outs are blurred">
+              Unknown · {unknownPolicy}
             </button>
             <div className="spacer" />
             {running && <button className="stop" onClick={stop}>Stop</button>}

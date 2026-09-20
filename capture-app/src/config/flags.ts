@@ -7,7 +7,11 @@ const env = ((import.meta as any).env ?? (typeof process !== "undefined" ? proce
 const cluster = (env.VITE_SOLANA_CLUSTER ?? "devnet") as "devnet" | "localnet";
 
 export const flags = {
-  DEFAULT_CONSENT: "blur" as const, // fail-safe: unknown/undecoded ⇒ blur
+  // What a face with NO usable consent record gets: no badge read, badge not
+  // registered, or chain cache stale. "blur" is the fail-safe (default-deny).
+  // "clear" blurs only people who are RECOGNIZED as opted out — on-chain opt_out
+  // or a badge whose light says OPT-OUT — and leaves everyone else alone.
+  DEFAULT_CONSENT: (env.VITE_DEFAULT_CONSENT ?? "blur") as "blur" | "clear",
   DEMO_FALLBACK_MODE: false, // load a clip instead of a live source
 
   // ---- C: consent registry (Solana) + notify service ----------------------
