@@ -29,6 +29,18 @@ ROSE (opt-out) — read from the pixels inside the box (G above R or not; the we
 crosstalk never flips the sign). The app then applies the same confirm (2 reads in 4 s)
 and hold rules as the classical engine (`capture-app/src/decode/key.ts` `ingest`).
 
+## What it measured (Sun 2026-09-20, epoch-16 checkpoint)
+
+| input | result |
+|---|---|
+| four 🎥 clips of badge 27 (175 frames, 0.3–0.8 m, white ring still on, LEDs at 255) | read directly in 174 frames; the classical engine managed 42, 42, 34, 24 of 43–44 per clip *including* holds |
+| two clips with no key on the badge (149 frames) | no reading |
+| 36 synthetic badges, both colours, key 40 / 70 / 140 px wide | 33 exact id + consent, 0 wrong; the misses are 40 px keys (12 px glyphs) |
+| round trip from the browser, 1280 px frame, M4 Pro | ~80 ms (faces ~40, badge ~20, JPEG + transfer the rest) → results ~12×/s, the display loop stays at camera rate |
+
+Caveat: the clips above also fed the training set (labelled frames, and unreadable
+frames with the badge covered by a synthetic one), so fresh recordings are the honest test.
+
 ## Retraining the badge model (~40 min on an M4 Pro)
 
 ```bash
