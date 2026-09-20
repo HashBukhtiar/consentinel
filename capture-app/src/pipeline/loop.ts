@@ -226,16 +226,19 @@ function drawOverlay(
       const b = c.box;
       ctx.strokeStyle = c.confident ? "#f5b942" : "#ff5c72";
       ctx.strokeRect(b.x * sx, b.y * sy, b.w * sx, b.h * sy);
-      const why = c.confident
-        ? ALPHABET_NAMES[c.symbol!]
-        : c.borderLum <= flags.BEACON_MIN_BORDER ? "ring too dim" : c.borderLum >= 250 ? "clipped to white — lower badge BRIGHT / room light" : "no clear symbol";
-      label(b.x * sx, b.y * sy, `${Math.round(b.w)}px · ring ${Math.round(c.borderLum)} · ${why}`, c.confident ? "#f5b942" : "#ff5c72");
+      const why = c.label !== undefined
+        ? c.label
+        : c.confident
+          ? ALPHABET_NAMES[c.symbol!]
+          : c.borderLum <= flags.BEACON_MIN_BORDER ? "ring too dim" : c.borderLum >= 250 ? "clipped to white — lower badge BRIGHT / room light" : "no clear symbol";
+      label(b.x * sx, b.y * sy, c.label !== undefined ? `${Math.round(b.w)}px · ${why}` : `${Math.round(b.w)}px · ring ${Math.round(c.borderLum)} · ${why}`, c.confident ? "#f5b942" : "#ff5c72");
     }
     for (const t of dbg.tracks) {
       if (t.lastId === null) label(t.cx * sx - 30, t.cy * sy + 18, "reading…", "#f5b942");
     }
-    const hud = `decode ${dbg.width}px · ${dbg.candidates.length} candidate${dbg.candidates.length === 1 ? "" : "s"} · bright ${(dbg.bright * 100).toFixed(1)}%` +
-      (dbg.candidates.length === 0 ? (dbg.bright < 0.002 ? " — no bright ring: closer / START the beacon / dimmer room" : " — bright blobs but none 4:3 with a white ring: face the screen to the camera") : "");
+    const seq = flags.BEACON_OPTICAL_MODE === "seq";
+    const hud = `decode ${dbg.width}px · ${seq ? "seq" : "colour"} · ${dbg.candidates.length} blinking region${dbg.candidates.length === 1 ? "" : "s"}` +
+      (dbg.candidates.length === 0 ? (seq ? " — nothing blinking: START the beacon, hold it still, closer" : (dbg.bright < 0.002 ? " — no bright ring: closer / START the beacon / dimmer room" : " — bright blobs but none 4:3 with a white ring")) : "");
     label(8, H - 8, hud, "#e6ebf5");
   }
   if (dbg && dbg.width) {

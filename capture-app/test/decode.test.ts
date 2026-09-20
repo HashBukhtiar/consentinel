@@ -75,14 +75,14 @@ const fineFor = (s: number): ImageData => {
   paintPatch(data, cw, ch, { x: 0, y: 0, w: cw, h: ch }, colors[s]);
   return { data, width: cw, height: ch } as unknown as ImageData;
 };
-const decA = _internal.newDecoder();
+const decA = _internal.newColorDecoder(); // the fine-sampling path belongs to the colour decoder
 let coarseOnly: string | undefined; let ta = 0;
 for (let c = 0; c < 3; c++) for (let s = 0; s < SYMBOLS_PER_FRAME; s++) for (let k = 0; k < 2; k++) {
   const o = decA.decode(coarseGrey(), (ta += 50));
   if (o.length) coarseOnly = o[0].beaconId;
 }
 assert.equal(coarseOnly, undefined, "grey interior + no sampler ⇒ no decode");
-const decB = _internal.newDecoder();
+const decB = _internal.newColorDecoder();
 let fine: string | undefined; let tb = 0; let curS = 0;
 for (let c = 0; c < 3; c++) for (let s = 0; s < SYMBOLS_PER_FRAME; s++) { curS = s; for (let k = 0; k < 2; k++) {
   const o = decB.decode(coarseGrey(), (tb += 50), () => fineFor(curS));

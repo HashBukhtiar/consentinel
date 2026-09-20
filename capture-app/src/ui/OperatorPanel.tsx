@@ -55,6 +55,11 @@ export function OperatorPanel({ fps, source, tracks, events, beacons, debug, dec
   const beaconHint = (): string | null => {
     if (decoder === "stub" || beacons.length || !debug || !debug.width) return null;
     const cands = debug.candidates;
+    if (flags.BEACON_OPTICAL_MODE === "seq") {
+      if (!cands.length) return "nothing blinking in frame — press START on the badge (beacon screen), hold it still, bring it closer";
+      const best = cands.reduce((a, b) => (b.box.w > a.box.w ? b : a));
+      return `blinking region ${Math.round(best.box.w)} px · ${best.label ?? "reading"}`;
+    }
     if (!cands.length) {
       return debug.bright < 0.002
         ? "no bright ring in frame — press START on the badge (beacon screen), bring it closer (ring ≥ 22 px here), dim the room"

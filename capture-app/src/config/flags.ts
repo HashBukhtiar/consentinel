@@ -48,6 +48,25 @@ export const flags = {
   BEACON_DECODER: (env.VITE_BEACON_DECODER ?? "optical") as "stub" | "optical",
   // draw what the decoder sees on the feed (candidate patches, luma, bits, decoded ids)
   BEACON_DEBUG: (env.VITE_BEACON_DEBUG ?? "1") !== "0",
+  // Optical decoder engine. "seq": identity from the ORDER of colour changes
+  // matched against all 512 possible frames (no white reference, no colour
+  // calibration — the only thing that worked on a real webcam, see
+  // src/decode/seq.ts). "color": Maaz's absolute-colour classifier (what the
+  // sweep models; needs a resolvable white ring and an sRGB-like panel).
+  BEACON_OPTICAL_MODE: (env.VITE_BEACON_OPTICAL_MODE ?? "seq") as "seq" | "color",
+  // seq decoder knobs (measured on data/diag 2026-09-20, 1.5 m, 20 fps):
+  SEQ_DIFF_T: 60, // sum |ΔR|+|ΔG|+|ΔB| between consecutive frames that counts as "changed" (badge symbol changes measure 40–400; sensor noise ~20)
+  SEQ_MIN_W: 8, // smallest blinking rectangle worth tracking, px at PROCESS_WIDTH (~3 m at 1280)
+  SEQ_MIN_FILL: 0.45, // a lit rectangle is solid; a moving person is ragged
+  SEQ_CLEAN_SD: 25, // interior colour spread above this = mid-refresh / motion frame, skipped (clean frames measured ≤ 22)
+  SEQ_RUN_SPLIT: 20, // colour jump that starts a new run (BLUE→AZURE, the closest pair on the webcam, was 38; a spurious split re-merges in the matcher)
+  SEQ_SAME_MAX: 30, // same symbol ⇒ all its colours within this of their mean
+  SEQ_DIFF_MIN: 28, // different symbols ⇒ centroids at least this far apart
+  SEQ_MIN_RUNS: 12, // > one 9-symbol frame before a match is attempted
+  SEQ_WINDOW_RUNS: 24, // match over the most recent runs (≈ 2.5 frames)
+  SEQ_HISTORY_MS: 5000,
+  SEQ_MATCH_EVERY: 4, // frames between match attempts per track (a full match is ~4 ms)
+  SEQ_TRACK_MISS: 45, // frames a blink track survives without a new change blob (~1.5 s; symbols change every 3–5 frames)
   // Localization mask = WHITENESS: min(R,G,B) > this. Measured on a real webcam
   // frame in a lit room: the badge's white ring came out [121,169,203] (min 121),
   // the coloured interior always has a channel near 0, skin ≈ 110-130 (and a
@@ -69,7 +88,7 @@ export const flags = {
   // detection + decode input width; higher = badges decode from farther (costs CPU).
   // The badge patch must be ≥ BEACON_MIN_W px wide here: at 720 that is roughly
   // ≤ 1 m from a laptop webcam, at 1280 about ≤ 1.8 m. Live-switchable in the UI.
-  PROCESS_WIDTH: Number(env.VITE_PROCESS_WIDTH ?? 720),
+  PROCESS_WIDTH: Number(env.VITE_PROCESS_WIDTH ?? 1280), // 1280: the badge needs the pixels (1080p webcam); drop to 720 on a slow laptop
   DISPLAY_MAX_WIDTH: 960, // composited output width cap
   IOU_MATCH: 0.3, // tracker match threshold
   TRACK_MAX_MISSED: 10, // frames to hold a blur through occlusion (~0.6s @15fps)

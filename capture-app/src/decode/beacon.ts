@@ -25,6 +25,7 @@ import type { RGB } from "@shared/beacon";
 import type { BeaconReading, DecodeBeacons } from "../shared/schema";
 import { SAMPLE_BOX_FRAC } from "./patch";
 import { flags } from "../config/flags";
+import { SeqDecoder } from "./seq";
 
 type Frame = ImageData; // uses only .data/.width/.height
 type Box = { x: number; y: number; w: number; h: number };
@@ -229,7 +230,8 @@ class FrameAssembler {
 export interface BeaconDebug {
   width: number;
   height: number;
-  candidates: { box: Box; borderLum: number; confident: boolean; symbol: number | null }[];
+  /** `label` is set by the seq decoder (its status per blinking region); `symbol` by the colour decoder */
+  candidates: { box: Box; borderLum: number; confident: boolean; symbol: number | null; label?: string }[];
   tracks: { cx: number; cy: number; lastId: number | null; sinceDecodeMs: number; missed: number }[];
   bright: number; // fraction of pixels passing the whiteness mask (0..1) — ~0 ⇒ ring too dim / too far
 }
@@ -305,16 +307,38 @@ function nearest(set: Iterable<PatchTrack>, cx: number, cy: number, maxPx: numbe
   return best;
 }
 
-const decoder = new BeaconDecoder();
-export const decodeBeacons = (frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] =>
-  decoder.decode(frame, tMs, sampler);
+// ---- engine selection ------------------------------------------------------------
+// The seq decoder is the one that works on a real webcam (see seq.ts); the
+// colour decoder stays available for the tune page, the sweep and A/B tests.
+const colorDecoder = new BeaconDecoder();
+const seqDecoder = new SeqDecoder();
 
-/** A decoder with its own patch-track state — for the offline sweep, which
- *  runs hundreds of independent trials and must not leak state between them. */
+function seqDecode(frame: ImageData, tMs: number): BeaconReading[] {
+  const out = seqDecoder.decode(frame, tMs);
+  const d = seqDecoder.debug;
+  lastDebug = {
+    width: d.width, height: d.height, bright: 0,
+    candidates: d.tracks.map((t) => ({ box: t.box, borderLum: 0, confident: t.lastId !== null, symbol: null, label: t.status })),
+    tracks: d.tracks.map((t) => ({ cx: t.cx, cy: t.cy, lastId: t.lastId, sinceDecodeMs: t.lastId === null ? Infinity : tMs - t.lastMatchMs, missed: t.missed })),
+  };
+  return out;
+}
+
+export const decodeBeacons = (frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] =>
+  flags.BEACON_OPTICAL_MODE === "seq" ? seqDecode(frame, tMs) : colorDecoder.decode(frame, tMs, sampler);
+
+/** A COLOUR decoder with its own patch-track state — for the offline sweep, which
+ *  models the colour path and must not leak state between trials. */
 export function createDecoder(): DecodeBeacons {
   const d = new BeaconDecoder();
   return (frame, tMs) => d.decode(frame, tMs);
 }
 
-// exported for the self-check
-export const _internal = { locatePatches, sampleSymbol, scanComponents, newDecoder: () => new BeaconDecoder() };
+// exported for the self-check / replay. newDecoder() follows BEACON_OPTICAL_MODE.
+export const _internal = {
+  locatePatches, sampleSymbol, scanComponents,
+  newDecoder: (): { decode: (f: ImageData, tMs: number, sampler?: RegionSampler) => BeaconReading[] } =>
+    flags.BEACON_OPTICAL_MODE === "seq" ? new SeqDecoder() : new BeaconDecoder(),
+  newColorDecoder: () => new BeaconDecoder(),
+  newSeqDecoder: () => new SeqDecoder(),
+};
