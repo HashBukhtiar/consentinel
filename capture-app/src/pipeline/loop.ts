@@ -169,7 +169,10 @@ export class Pipeline {
       // the badge's A button, over light: relay a consent bit that disagrees with the chain (debounced, fire-and-forget)
       traceStage("request", () => { for (const b of beacons) if (b.optIn !== undefined) consentRequester.observe(b.beaconId, b.optIn, getConsent(b.beaconId)); });
       this.timed("blur", () => {
-        if (flags.COMPOSITE === "frame") {
+        if (!flags.PRIVACY_BLUR) {
+          // operator turned blurring off (to show the raw feed); decisions and
+          // film events below still run, only the pixels are left alone.
+        } else if (flags.COMPOSITE === "frame") {
           // DEFAULT DENY, as a composite: pixelate the WHOLE frame, then punch
           // clear windows only for faces with an explicit opt_in. A face the
           // detector never found (profile, motion blur, far, dark) therefore

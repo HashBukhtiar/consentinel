@@ -20,6 +20,7 @@ export function decide(tracks: Track[], getConsent: GetConsent, nowMs: number): 
       t.beaconOptIn = undefined;
     }
     t.consent = t.beaconId ? getConsent(t.beaconId) : "unknown";
-    t.blurred = t.consent !== "opt_in" || t.beaconOptIn === false;
+    const allowed = t.consent === "opt_in" || (t.consent === "unknown" && flags.DEFAULT_CONSENT === "clear");
+    t.blurred = !allowed || t.beaconOptIn === false;
   }
 }

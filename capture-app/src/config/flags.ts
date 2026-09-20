@@ -7,7 +7,11 @@ const env = ((import.meta as any).env ?? (typeof process !== "undefined" ? proce
 const cluster = (env.VITE_SOLANA_CLUSTER ?? "devnet") as "devnet" | "localnet";
 
 export const flags = {
-  DEFAULT_CONSENT: "blur" as const, // fail-safe: unknown/undecoded ⇒ blur
+  // What a face with NO usable consent record gets: no badge read, badge not
+  // registered, or chain cache stale. "blur" is the fail-safe (default-deny).
+  // "clear" blurs only people who are RECOGNIZED as opted out — on-chain opt_out
+  // or a badge whose light says OPT-OUT — and leaves everyone else alone.
+  DEFAULT_CONSENT: (env.VITE_DEFAULT_CONSENT ?? "blur") as "blur" | "clear",
   DEMO_FALLBACK_MODE: false, // load a clip instead of a live source
 
   // ---- C: consent registry (Solana) + notify service ----------------------
@@ -169,6 +173,7 @@ export const flags = {
   //   "faces": pixelate only detected faces that are not opt_in (padded outward).
   //            Looks like a normal video with blurred people; an undetected face
   //            is shown clear. The privacy story is weaker; the picture is nicer.
+  PRIVACY_BLUR: true, // operator can turn all pixelation off from the UI (raw feed for the demo)
   COMPOSITE: (env.VITE_COMPOSITE ?? "frame") as "frame" | "faces",
   BLUR_PAD: 0.35, // "faces" mode: pad each blurred bbox outward — fail-safe covers more, never less
 

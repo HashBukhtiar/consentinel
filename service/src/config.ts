@@ -75,6 +75,10 @@ export const config = {
   /** One on-chain notice per badge per this window; film-events inside it are covered by the last notice (still audited + attested). */
   NOTICE_MIN_INTERVAL_MS: Number(env("NOTICE_MIN_INTERVAL_MS", "60000")),
   MAX_PENDING_EVENTS: 500,
+  /** Thru (Unto Labs) evidence ledger — every film-event + attestation batch becomes its own Alphanet account via the `thru` CLI. Auto-disables if the CLI/funds are missing. */
+  THRU_ENABLED: bool("THRU_ENABLED", true),
+  THRU_FEE_PAYER: env("THRU_FEE_PAYER", "consentinel"),
+  THRU_EXPLORER: env("THRU_EXPLORER", "https://scan.thru.org"),
 };
 
 /** RPC URL with any query string (API keys live there) removed. */
