@@ -8,8 +8,9 @@
 import assert from "node:assert";
 import { associate } from "../src/vision/associate";
 import { decide } from "../src/consent/decide";
+import { createGuard } from "../src/consent/antiSpoof";
 import { flags } from "../src/config/flags";
-import type { Consent, Track } from "../src/shared/schema";
+import type { BeaconReading, Consent, Track } from "../src/shared/schema";
 
 const face = (id: string, x: number, y: number): Track => ({
   trackId: id,
@@ -110,6 +111,102 @@ const face = (id: string, x: number, y: number): Track => ({
   assert.equal(t.blurred, true, "opt_out ⇒ blur");
   decide([t], () => "unknown", 1000);
   assert.equal(t.blurred, true, "unknown ⇒ blur");
+}
+
+// ------------------------------------------------------------- anti-forgery
+// The optical patch is a static public id with no signature, so a phone
+// screen can render a valid one. These guards do not make it unforgeable —
+// they make a GUESS slow and visible. See src/consent/antiSpoof.ts.
+const bcn = (id: string, x: number, y: number): BeaconReading => ({
+  beaconId: id,
+  imagePosition: { x, y },
+  confidence: 1,
+});
+const STABLE = flags.SPOOF_STABLE_MS;
+
+// A freshly-appeared id is NOT believed. Un-blurring on the first frame is
+// exactly what lets someone flash 256 ids through a phone in nine seconds.
+{
+  const g = createGuard();
+  assert.equal(g.filter([bcn("AA", 0.5, 0.5)], 1000).length, 0, "a brand-new id is not believed yet");
+  assert.equal(g.filter([bcn("AA", 0.5, 0.5)], 1000 + STABLE - 1).length, 0, "still inside the stability window");
+  assert.equal(g.filter([bcn("AA", 0.5, 0.5)], 1000 + STABLE).length, 1, "a steady badge becomes believable");
+}
+
+// A real badge drops out constantly (motion blur, occlusion). A GAP must not
+// restart the clock, or a genuine badge would never become believable.
+{
+  const g = createGuard();
+  g.filter([bcn("AA", 0.5, 0.5)], 1000);
+  g.filter([], 1100); // decoder saw nothing this frame
+  g.filter([], 1200);
+  assert.equal(g.filter([bcn("AA", 0.5, 0.5)], 1000 + STABLE).length, 1, "a sighting gap does not reset stability");
+}
+
+// ...but an id CHANGE at the same spot does. This is the brute-force gate:
+// every guess costs a fresh stability window.
+{
+  const g = createGuard();
+  g.filter([bcn("AA", 0.5, 0.5)], 1000);
+  g.filter([bcn("BB", 0.5, 0.5)], 1000 + STABLE - 1); // flipped just before it would count
+  assert.equal(g.filter([bcn("BB", 0.5, 0.5)], 1000 + STABLE).length, 0, "a switched id restarts the clock");
+}
+
+// A screen cycling through ids gets that whole spot quarantined, so the
+// attacker cannot simply keep guessing from one position.
+{
+  const g = createGuard();
+  const ids = ["AA", "BB", "CC", "DD", "EE"];
+  let t = 1000;
+  for (const id of ids) { g.filter([bcn(id, 0.5, 0.5)], t); t += 100; }
+  // even holding the last one steady past the stability window, the spot is out
+  assert.equal(g.filter([bcn("EE", 0.5, 0.5)], t + STABLE + 1).length, 0, "a churning spot is quarantined");
+  assert.equal(
+    g.filter([bcn("EE", 0.5, 0.5)], t + flags.SPOOF_QUARANTINE_MS + STABLE + 1).length,
+    1,
+    "quarantine eventually lifts",
+  );
+}
+
+// Two patches showing one id: a clone. There is no way to tell the copy from
+// the original, so BOTH are dropped — copying a number off a chest gains
+// nothing, and costs the victim their own binding.
+{
+  const g = createGuard();
+  let t = 1000;
+  for (; t <= 1000 + STABLE; t += 100) g.filter([bcn("AA", 0.2, 0.5)], t); // real badge, settled
+  assert.equal(g.filter([bcn("AA", 0.2, 0.5)], t).length, 1, "the real badge was believed");
+  const both = g.filter([bcn("AA", 0.2, 0.5), bcn("AA", 0.8, 0.5)], t + 100);
+  assert.equal(both.length, 0, "a cloned id un-blurs nobody, original included");
+}
+
+// ...and the clone stays distrusted after it blinks out, so flickering on
+// alternate frames cannot slip it through the gap.
+{
+  const g = createGuard();
+  let t = 1000;
+  for (; t <= 1000 + STABLE; t += 100) g.filter([bcn("AA", 0.2, 0.5)], t);
+  g.filter([bcn("AA", 0.2, 0.5), bcn("AA", 0.8, 0.5)], t);
+  assert.equal(g.filter([bcn("AA", 0.2, 0.5)], t + 100).length, 0, "clone block outlives the frame");
+}
+
+// The decoder re-acquires a patch and briefly reports it twice at nearly the
+// same spot. That is double-tracking, not a clone, and must not blur the
+// wearer — otherwise the guard fires constantly on real footage.
+{
+  const g = createGuard();
+  let t = 1000;
+  for (; t <= 1000 + STABLE; t += 100) g.filter([bcn("AA", 0.5, 0.5)], t);
+  const out = g.filter([bcn("AA", 0.5, 0.5), bcn("AA", 0.51, 0.505)], t + 100);
+  assert.ok(out.length >= 1, "two readings of one badge at one spot is not a clone");
+}
+
+// Two different badges in frame are untouched by any of this.
+{
+  const g = createGuard();
+  let t = 1000;
+  for (; t <= 1000 + STABLE; t += 100) g.filter([bcn("AA", 0.2, 0.5), bcn("BB", 0.8, 0.5)], t);
+  assert.equal(g.filter([bcn("AA", 0.2, 0.5), bcn("BB", 0.8, 0.5)], t).length, 2, "two real badges both pass");
 }
 
 console.log("safety.test.ts: all default-deny guards hold");

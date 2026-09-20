@@ -4,6 +4,7 @@ import { Tracker } from "../vision/track";
 import { associate } from "../vision/associate";
 import { pixelateAll, clearWindow } from "../vision/blur";
 import { decide } from "../consent/decide";
+import { guardBeacons } from "../consent/antiSpoof";
 import { FilmEmitter } from "../events/filmEvent";
 import { decodeBeacons as stubDecode } from "../stubs/decodeBeacons";
 import { decodeBeacons as opticalDecode } from "../decode/beacon";
@@ -91,10 +92,13 @@ export class Pipeline {
       const faces = traceStage("detect", () => detectFaces(this.detector, this.detectCanvas, tMs));
       const tracks = traceStage("track", () => this.tracker.update(faces));
       const imageData = pctx.getImageData(0, 0, procW, procH); // A's decoder reads this
-      const beacons = traceStage("decode", () =>
+      const decoded = traceStage("decode", () =>
         flags.BEACON_DECODER === "optical"
           ? opticalDecode(imageData, tMs, sampleRegion)
           : stubDecode(imageData, tMs));
+      // A decoded id is not yet a believed id: the patch is forgeable, so drop
+      // readings that behave like a screen being cycled rather than a badge.
+      const beacons = traceStage("anti-spoof", () => guardBeacons(decoded, tMs));
       traceStage("associate", () => associate(tracks, beacons, tMs));
       traceStage("decide", () => decide(tracks, getConsent, tMs)); // sync read of the Solana-synced cache
       traceStage("blur+notify", () => {

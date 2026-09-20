@@ -44,6 +44,25 @@ export const flags = {
   BEACON_ID_HOLD_MS: 2000, // report last decoded id this long after a decode (decodes are ~0.5-1s apart)
   BEACON_CONFIRM_MS: 1500, // an id must decode twice within this window to be trusted
 
+  // ---- anti-forgery gate (src/consent/antiSpoof.ts) ----------------------
+  // The patch is a static public 8-bit id: no secret, no signature, forgeable
+  // by anyone with a phone screen. These knobs do not make it unforgeable —
+  // they make guessing slow and visible. See the header of antiSpoof.ts.
+  SPOOF_GUARD: true, // off ⇒ believe every decode (pre-hardening behaviour)
+  // An id must hold at one place this long before it can un-blur anyone. This
+  // is added latency on the FIRST sighting of a real badge, so it trades
+  // demo snappiness against brute-force cost directly. 1500 ≈ one extra
+  // second on top of the decoder's own confirm.
+  SPOOF_STABLE_MS: 1500,
+  SPOOF_SITE_RADIUS: 0.08, // normalized; how far a patch can move and stay "the same place"
+  SPOOF_SITE_TTL_MS: 2000, // forget a place that has gone quiet this long
+  // A real badge shows one id. Three different ids at one spot inside the
+  // window is a screen being flipped — sit that spot out.
+  SPOOF_CHURN_MS: 5000,
+  SPOOF_MAX_IDS: 3,
+  SPOOF_QUARANTINE_MS: 10_000,
+  SPOOF_CLONE_HOLD_MS: 3000, // same id in two places ⇒ distrust it this long
+
   // vision/perf (mine)
   PROCESS_WIDTH: 720, // detection + decode input width; higher = badges decode from farther (costs CPU)
   DISPLAY_MAX_WIDTH: 960, // composited output width cap
