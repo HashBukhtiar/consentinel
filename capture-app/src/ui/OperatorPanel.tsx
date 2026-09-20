@@ -52,9 +52,9 @@ export function OperatorPanel({ fps, source, tracks, events }: {
       <div className="stats">
         <div className="stat"><b>{fps}</b><span>fps</span></div>
         <div className="stat"><b>{tracks.length}</b><span>faces</span></div>
-        <div className="stat"><b>{blurred}</b><span>blurred</span></div>
+        <div className={"stat" + (blurred ? " hot" : "")}><b>{blurred}</b><span>blurred</span></div>
       </div>
-      <div className="row"><span>source</span><b>{source}</b></div>
+      <div className="row"><span>Source</span><b className="mono">{source}</b></div>
 
       <h3>Tracks</h3>
       <table>
@@ -65,10 +65,10 @@ export function OperatorPanel({ fps, source, tracks, events }: {
               <td>{t.trackId}</td>
               <td>{t.beaconId ?? "—"}</td>
               <td className={"c-" + t.consent}>{t.consent}</td>
-              <td>{t.blurred ? "🟥 blurred" : "🟩 clear"}</td>
+              <td><span className={"state " + (t.blurred ? "blurred" : "clear")}>{t.blurred ? "blurred" : "clear"}</span></td>
             </tr>
           ))}
-          {!tracks.length && <tr><td colSpan={4} className="muted">no faces</td></tr>}
+          {!tracks.length && <tr><td colSpan={4} className="muted">No faces detected</td></tr>}
         </tbody>
       </table>
 
@@ -94,7 +94,7 @@ export function OperatorPanel({ fps, source, tracks, events }: {
         </>
       )}
 
-      <h3>Film events <span className="muted">→ badge alarm + ElevenLabs + on-chain hash</span> <span className={"dot " + (svcUp ? "ok" : "warn")} title={svcUp ? "notify service connected" : "notify service not connected"} /></h3>
+      <h3>Film events <span className={"dot " + (svcUp ? "ok" : "warn")} title={svcUp ? "Notify service connected" : "Notify service offline"} /></h3>
       {events.map((e) => {
         const s = svc.get(e.eventId);
         return (
@@ -109,20 +109,22 @@ export function OperatorPanel({ fps, source, tracks, events }: {
           </div>
         );
       })}
-      {!events.length && <div className="muted">none yet</div>}
+      {!events.length && <div className="muted">None yet</div>}
 
-      <h3>Badge radio <span className="muted">· CNS frames ↕ bridge</span> <span className={"dot " + (bridges ? "ok" : svcUp ? "warn" : "")} title={bridges ? `${bridges} radio bridge(s) on the air` : "no radio bridge connected — frames queue for GET /bridge/pending"} /></h3>
-      {radio.map((r, i) => {
-        const n = radioNote(r);
-        return (
-          <div className={"act " + (r.dir === "up" ? "push" : n.err ? "error" : "info")} key={`${r.at}-${i}`}>
-            <span className="t">{new Date(r.at).toLocaleTimeString()}</span>
-            <span className="x"><b>{r.dir === "down" ? "↓" : "↑"} {r.frame}</b> · {n.text}</span>
-            {n.url && <a href={n.url} target="_blank" rel="noreferrer">tx ↗</a>}
-          </div>
-        );
-      })}
-      {!radio.length && <div className="muted">{svcUp ? "no frames yet — a film-event sends CNSF, a consent change sends CNSC, the badge's A button sends CNSR" : "service offline"}</div>}
+      <details className="debug">
+        <summary>Badge radio <span className={"dot " + (bridges ? "ok" : svcUp ? "warn" : "")} title={bridges ? `${bridges} bridge(s) on the air` : "No radio bridge connected"} /></summary>
+        {radio.map((r, i) => {
+          const n = radioNote(r);
+          return (
+            <div className={"act " + (r.dir === "up" ? "push" : n.err ? "error" : "info")} key={`${r.at}-${i}`}>
+              <span className="t">{new Date(r.at).toLocaleTimeString()}</span>
+              <span className="x"><b>{r.dir === "down" ? "↓" : "↑"} {r.frame}</b> · {n.text}</span>
+              {n.url && <a href={n.url} target="_blank" rel="noreferrer">tx ↗</a>}
+            </div>
+          );
+        })}
+        {!radio.length && <div className="muted">{svcUp ? "No frames yet" : "Service offline"}</div>}
+      </details>
     </aside>
   );
 }

@@ -10,7 +10,7 @@
 // flags.BEACON_* need ~10 min of tuning against a real badge/recording.
 import { decodeFrame, hex2, FRAME_CELL, SYMBOLS_PER_FRAME, PATCH, BORDER_PX } from "@shared/beacon";
 import type { SymbolSample } from "@shared/beacon";
-import type { BeaconReading } from "../shared/schema";
+import type { BeaconReading, DecodeBeacons } from "../shared/schema";
 import { cellRectFrac } from "./patch";
 import { flags } from "../config/flags";
 

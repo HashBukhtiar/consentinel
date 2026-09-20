@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Pipeline, PipelineState } from "../pipeline/loop";
 import { listCameras, startCamera, startScreen } from "../sources/videoSource";
-import { startSynthetic, SyntheticHandle } from "../sources/synthetic";
 import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
 import { chain, startConsent } from "../consent/store";
@@ -9,10 +8,8 @@ import type { FilmEvent, Track } from "../shared/schema";
 
 export function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const baseRef = useRef<HTMLVideoElement>(null); // camera behind the synthetic overlay
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pipeRef = useRef<Pipeline | null>(null);
-  const synthRef = useRef<SyntheticHandle | null>(null);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState("");
   const [running, setRunning] = useState(false);
@@ -28,74 +25,53 @@ export function App() {
   useEffect(() => { listCameras().then(setCameras).catch(() => {}); }, [running]);
   useEffect(() => { startConsent(); }, []); // chain cache runs from page load, independent of the camera
 
-  async function startPipeline(stream: MediaStream | null, fileUrl: string | null, label: string) {
+  async function begin(stream: MediaStream, label: string) {
+    stop();
     setError("");
     const v = videoRef.current!;
-    if (stream) { v.srcObject = stream; v.removeAttribute("src"); }
-    else if (fileUrl) { v.srcObject = null; v.src = fileUrl; v.loop = true; }
+    v.srcObject = stream;
     await v.play().catch(() => {});
     const p = new Pipeline(v, canvasRef.current!, (s: PipelineState) => { setFps(s.fps); setTracks(s.tracks); },
-      (e) => setEvents((prev) => [e, ...prev].slice(0, 6)));
+      (e) => setEvents((prev) => [e, ...prev].slice(0, 8)));
     pipeRef.current = p;
     try { await p.start(); setRunning(true); setSource(label); }
-    catch (e: any) { setError("detector init failed — did you run `npm run setup`? " + e.message); }
-  }
-
-  function begin(stream: MediaStream | null, fileUrl: string | null, label: string) {
-    stop();
-    return startPipeline(stream, fileUrl, label);
-  }
-
-  // Overlay real-format beacon patches on the webcam and decode them live — no
-  // hardware. Switches the decoder to optical for this session only.
-  async function startSyntheticBadge() {
-    stop();
-    try {
-      const cam = await startCamera(deviceId || undefined);
-      const base = baseRef.current!;
-      base.srcObject = cam;
-      await base.play().catch(() => {});
-      setBeacon("optical");
-      synthRef.current = startSynthetic(base);
-      await startPipeline(synthRef.current.stream, null, "Synthetic badge · optical");
-    } catch (e: any) { fail(e); }
+    catch (e: any) { setError("Camera detector failed to start — run `npm run setup`, then reload. (" + e.message + ")"); }
   }
 
   function stop() {
     pipeRef.current?.stop(); pipeRef.current = null;
-    synthRef.current?.stop(); synthRef.current = null;
-    for (const el of [videoRef.current, baseRef.current]) {
-      if (!el) continue;
-      (el.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop());
-      el.srcObject = null; el.removeAttribute("src");
-    }
-    setRunning(false); setTracks([]); setFps(0);
+    const v = videoRef.current;
+    if (v) { (v.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop()); v.srcObject = null; }
+    setRunning(false); setTracks([]); setFps(0); setSource("—");
   }
 
   const fail = (e: any) => setError(e?.message ?? String(e));
 
   return (
     <div className="app">
-      <header>
-        <h1>Consentinel <span>capture</span></h1>
-        <div className="tag">fail-safe: blur unless opt-in</div>
-        {chain && <div className="tag chain" title={chain.status.programId}>consent: Solana {chain.status.cluster}</div>}
+      <header className="topbar">
+        <div className="brand">
+          <h1>Consentinel</h1>
+          <span>consent-respecting capture</span>
+        </div>
+        <div className="badges">
+          <span className="chip warn-chip">Blur unless opt-in</span>
+          {chain && <span className="chip chain-chip" title={chain.status.programId}>Solana {chain.status.cluster}</span>}
+        </div>
       </header>
 
       <div className="controls">
-        <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
+        <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)} aria-label="Camera">
           <option value="">Default camera</option>
           {cameras.map((c, i) => <option key={c.deviceId} value={c.deviceId}>{c.label || `Camera ${i + 1}`}</option>)}
         </select>
-        <button onClick={() => startCamera(deviceId || undefined).then((s) => begin(s, null, "Camera")).catch(fail)}>Use camera</button>
-        <button onClick={() => startScreen().then((s) => begin(s, null, "Screen · WhatsApp")).catch(fail)}>Share screen (WhatsApp)</button>
-        <button onClick={startSyntheticBadge}>Synthetic badge</button>
-        <button onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")} title="stub = fixed fake beacons · optical = decode the real badge">
-          beacon: {decoder}
+        <button onClick={() => startCamera(deviceId || undefined).then((s) => begin(s, "Camera")).catch(fail)}>Use camera</button>
+        <button onClick={() => startScreen().then((s) => begin(s, "Screen")).catch(fail)}>Share screen</button>
+        <button className={"seg " + decoder} onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")}
+          title="stub = fixed demo beacons · optical = decode the real badge">
+          Beacon: {decoder}
         </button>
-        <label className="file">Load clip
-          <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) begin(null, URL.createObjectURL(f), "Clip · fallback"); }} />
-        </label>
+        <div className="spacer" />
         {running && <button className="stop" onClick={stop}>Stop</button>}
       </div>
 
@@ -107,7 +83,6 @@ export function App() {
       </div>
 
       <video ref={videoRef} muted playsInline style={{ display: "none" }} />
-      <video ref={baseRef} muted playsInline style={{ display: "none" }} />
     </div>
   );
 }
