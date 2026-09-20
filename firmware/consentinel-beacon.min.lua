@@ -9,88 +9,22 @@ confirm_home=1
 version=0.2.0
 author=Consentinel
 ]==]
-
--- Consentinel consent beacon (HTN 2026 hacker badge).
---
--- TWO SCREENS, and the split is the design:
---   CONFIG -- large text for the WEARER at arm's length. At 60 deg FOV the
---     whole 35 mm screen is a few dozen camera pixels wide, so a 24 px label
---     is ~2 px tall in frame: the camera can never read it, only the wearer
---     can. Every choice is made here, and START arms the beacon.
---   BEACON -- the CAMERA's view. Full screen, ZERO text: a white border
---     around one block that changes colour every symbol. Any key returns.
---
--- Why one blinking block and not a static grid: spatial codes trade time for
--- area, and area ran out. A 3x2 grid gave each bit a handful of processed
--- pixels at 1 m. Blinking gives every bit the WHOLE block, a 5-colour
--- differential alphabet banks 2 bits per symbol, and a printed photo of a
--- badge cannot blink, so liveness is free.
---
--- The white border is static on purpose: it is both the localization anchor
--- and the white reference the decoder divides every interior colour by. That
--- division is what makes the alphabet immune to exposure and white balance.
---
--- The beacon now carries CONSENT as well as identity, RESTRICT-ONLY: a face
--- clears only when the chain record says opt-in AND the light says opt-in.
--- Light can subtract permission, never add it, so a spoofed or misread beacon
--- can only ever blur. That is what makes "press A -> blurred" work with no
--- radio at all.
---
--- Constants marked "MUST match" are mirrored in shared/beacon.ts. One
--- disagreement fails every CRC and the demo silently shows nothing.
-
 local BUTTON = badge.input.BUTTON
 local PRESSED = badge.input.KIND.PRESSED
-
--- ---------------------------------------------------------------- geometry
-
--- The patch is the WHOLE screen now. MUST match PATCH {0,0,320,240}.
---
--- CHANGE THESE NUMBERS.
 local SCREEN_W = 380
 local SCREEN_H = 300
--- Nudge the beacon. POS_Y climbs out of root's padding; SCREEN_H must grow
--- by the SAME amount or moving up just opens an equal gap at the bottom.
 local POS_X = -30
 local POS_Y = -30
-
--- 24, not 14. The border is anchor AND white reference, and it is the first
--- thing to die with distance: measured, each +4 px buys ~0.17 m of range for
--- ~5% of interior area, and the interior is one blob now so that area is
--- nearly free. MUST match BORDER_PX in shared/beacon.ts.
 local BORDER = 24
 local IN_W = SCREEN_W - 2 * BORDER
 local IN_H = SCREEN_H - 2 * BORDER
-
--- ------------------------------------------------------------- the alphabet
-
--- Seven exact RGB565 colours, max separation AFTER dividing by the white
--- border. Half-level hues beat the cube corners: R/G/B sit twice as far from
--- neutral as Y/C/M, so a corner palette is lopsided and its secondaries die
--- first under desaturation. No white, so the interior can never be mistaken
--- for the border. Index = wire symbol. MUST match ALPHABET:
---   0 BLACK  1 AZURE  2 LIME  3 AMBER  4 BLUE   <- data, RADIX = 5
---   5 MINT   6 ROSE                             <- frame marker = consent
--- Lua is 1-based, so DATA_COLOR[i + 1] is symbol i.
---
--- BRIGHT scales the WHOLE palette AND the white ring by one factor. This is
--- free, mathematically: the decoder divides every interior colour by the ring,
--- so scaling both leaves every ratio -- and therefore every symbol -- exactly
--- as it was. What it does change is absolute luminance, which is the thing a
--- camera clips. A saturated screen reads interior == ring == white, which is
--- the "uniform blob" case the classifier rejects on purpose.
--- Aim for a measured border luma of 190-210 in tune.html. 255 means clipping.
---   1.00 = full brightness (clips on most webcams in a dark room)
---   0.75 = a good starting point
 local BRIGHT = 0.75
-
 local function dim(rgb)
   local r = math.floor(((rgb >> 16) & 0xFF) * BRIGHT)
   local g = math.floor(((rgb >> 8) & 0xFF) * BRIGHT)
   local b = math.floor((rgb & 0xFF) * BRIGHT)
   return (r << 16) | (g << 8) | b
 end
-
 local DATA_COLOR = {
   dim(0x000000), dim(0x0082FF), dim(0x84FF00), dim(0xFF8200), dim(0x0000FF),
 }
@@ -98,12 +32,6 @@ local RADIX = 5
 local MARK_IN = dim(0x00FF84)  -- MARK_OPT_IN,  index 5 (MARK_IN_INDEX)
 local MARK_OUT = dim(0xFF0084) -- MARK_OPT_OUT, index 6 (MARK_OUT_INDEX)
 local WHITE = dim(0xFFFFFF)
-
--- ------------------------------------------------------------- wire format
-
--- msg = id(8) | consent(1) | reserved(1, always 0); payload = msg(10) | crc6.
--- Largest intermediate is msg << 6 = 0xFFC0, so nothing here trips the 32-bit
--- float trap documented in derive_beacon_id.
 local ID_BITS = 8    -- MUST match ID_BITS
 local MSG_BITS = 10  -- MUST match MSG_BITS
 local CRC_BITS = 6   -- MUST match CRC_BITS
@@ -112,22 +40,12 @@ local PAYLOAD_BITS = MSG_BITS + CRC_BITS -- 16,  MUST match PAYLOAD_BITS
 local BITS_PER_SYMBOL = 2                -- MUST match BITS_PER_SYMBOL
 local DATA_SYMBOLS = PAYLOAD_BITS // BITS_PER_SYMBOL -- 8,  MUST match
 local SYMBOLS = 1 + DATA_SYMBOLS         -- 9,  MUST match SYMBOLS_PER_FRAME
-
--- MUST match TIMING_MS. Index 2 -> 100 ms -> a 900 ms frame (FRAME_MS).
 local TIMING_MS = { 80, 100, 120, 150 }
 local DEFAULT_TIMING = 2
-
--- Full brightness, SAFE ONLY because the LEDs are STATIC: 40 was sized against
--- a blink, where six WS2812s switching every 100 ms is a ~127 mA step that can
--- brown out the badge. Steady ~120 mA here. Drop to ~160 if it ever resets.
 local LED_LEVEL = 255
 local STOPPED_MS = 2500
 local ALERT_MS = 6000
-
 local RADIO_TAG = "CNS"
-
--- ------------------------------------------------------------------ state
-
 local st = {
   screen = 1,   -- 1 = config, 2 = beacon. Integer, not a string: cheaper.
   beacon_id = 0,
@@ -142,28 +60,18 @@ local st = {
   note_on = false,
   frame = nil,  -- 9 colours; rebuilt only when id or consent changes
 }
-
 local ui = {}
-
--- ------------------------------------------------------------------ utils
-
 local function clamp(v, lo, hi)
   if v < lo then return lo end
   if v > hi then return hi end
   return v
 end
-
 local function hex2(v)
   local digits = "0123456789ABCDEF"
   local hi = (v >> 4) & 0xF
   local lo = v & 0xF
   return digits:sub(hi + 1, hi + 1) .. digits:sub(lo + 1, lo + 1)
 end
-
--- Augmented CRC-6 (the caller shifts the message left by CRC_BITS). Augmented
--- is not cosmetic: plain M(x) mod g(x) loses the burst guarantee, and a 2-bit
--- symbol error is a short burst, so this form catches every single-symbol
--- misread. MUST match crc6 in shared/beacon.ts.
 local function crc6(value, nbits)
   local reg = 0
   for i = nbits - 1, 0, -1 do
@@ -174,17 +82,9 @@ local function crc6(value, nbits)
   end
   return reg & 0x3F
 end
-
 local function symbol_ms()
   return TIMING_MS[st.timing]
 end
-
--- Symbol 0 is the marker and IS the consent bit, so a decoder knows the
--- wearer's answer from the first symbol it sees, not 900 ms later. The 8 data
--- symbols are DIFFERENTIAL: each step is 1 + b (b = 0..3) around a ring of 5,
--- so the step is never 0 and no two adjacent symbols share a colour. A
--- change-detecting decoder gets a guaranteed edge every boundary, which
--- removes clock recovery entirely.
 local function build_frame()
   local msg = ((st.beacon_id & 0xFF) << (MSG_BITS - ID_BITS))
     | ((st.consent == 1) and 2 or 0) -- reserved low bit stays 0
@@ -198,14 +98,6 @@ local function build_frame()
   end
   st.frame = f
 end
-
--- ------------------------------------------------------------------- leds
-
--- Static, never blinking. Six WS2812s switching together every 100 ms is a
--- ~127 mA step that rings the boost converter and can brown out the badge
--- mid-demo; level 40 static is ~19 mA. Mirroring the beacon buys the decoder
--- nothing anyway -- six point sources 25 mm apart are not a patch the
--- localizer can rectify -- so the LEDs are a HUMAN consent channel only.
 local function led_consent()
   if not st.leds_on then
     badge.led.clear()
@@ -219,23 +111,16 @@ local function led_consent()
   end
   badge.led.show()
 end
-
--- --------------------------------------------------------------------- ui
-
 local function refresh_config()
   local yes = st.consent == 1
   ui.c_id:set_text("ID " .. hex2(st.beacon_id))
   ui.c_cons:set_text(yes and "OPT-IN" or "OPT-OUT")
   ui.c_cons:style({ text_color = yes and MARK_IN or MARK_OUT })
-  -- Dimensions shown so a panel rendering smaller than advertised is a number.
   ui.c_rate:set_text(string.format("%d ms  leds %s  radio %s  %dx%d",
     symbol_ms(), st.leds_on and "on" or "off",
     st.radio_on and (st.radio_ok and "on" or "FAIL") or "off",
     SCREEN_W, SCREEN_H))
 end
-
--- One banner widget, two messages. Never called from on_tick: LED writes and
--- NVS commits stay off the hot path.
 local function notice(text, colour, ms, r, g, b)
   ui.c_ban:set_text(text)
   ui.c_ban:style({ text_color = colour })
@@ -247,7 +132,6 @@ local function notice(text, colour, ms, r, g, b)
     badge.led.show()
   end
 end
-
 local function show_beacon()
   st.screen = 2
   ui.cfg:hidden(true)
@@ -255,32 +139,23 @@ local function show_beacon()
   st.t0 = badge.sys.ms()
   st.last_slot = -1
 end
-
 local function show_config()
   st.screen = 1
   ui.bcn:hidden(true)
   ui.cfg:hidden(false)
 end
-
--- ------------------------------------------------------------------ radio
-
 local function radio_send(msg)
   if st.radio_on and st.radio_ok then badge.radio.send(msg) end
 end
-
 local function on_radio(mac, rssi, payload)
   if type(payload) ~= "string" or #payload < 6 then return end
   if payload:sub(1, 3) ~= RADIO_TAG then return end
-
   local kind = payload:sub(4, 4)
   local id = tonumber(payload:sub(5, 6), 16)
   if id == nil or id ~= st.beacon_id then return end
-
   if kind == "F" then
-    -- Film event: this badge was captured while not consenting.
     notice("YOU WERE FILMED", 0xF87171, ALERT_MS, LED_LEVEL, 0, 0)
   elseif kind == "C" then
-    -- Consent mirror pushed down from the chain-backed registry.
     local s = payload:sub(7, 7)
     if s == "1" or s == "0" then
       st.consent = (s == "1") and 1 or 0
@@ -291,33 +166,14 @@ local function on_radio(mac, rssi, payload)
     end
   end
 end
-
 local function radio_start()
   st.radio_ok = badge.radio.enable() and true or false
   if st.radio_ok then badge.radio.on_recv(on_radio) end
   return st.radio_ok
 end
-
--- -------------------------------------------------------------- lifecycle
-
--- ALWAYS derived, never stored. The old UP/DOWN `id_ovr` was a footgun: the
--- registry derives the id from this same FNV hash, so an override silently
--- stopped matching the on-chain record, with no way to undo it on the badge.
--- Deriving unconditionally also heals a badge that already has a stale key.
 local function derive_beacon_id()
   local bid = badge.me.badge_id()
   if type(bid) ~= "string" or #bid == 0 then return 0 end
-
-  -- FNV-1a over the provisioned badge id, folded to 8 bits. The registry
-  -- derives the same value, so the PDA seed and the beacon agree.
-  --
-  -- The offset basis MUST be written in hex. This badge's Lua has 32-bit
-  -- integers, so the decimal literal 2166136261 exceeds INT_MAX and is
-  -- parsed as a float, which then fails every bitwise operator with
-  -- "number has no integer representation". The hex form wraps to the same
-  -- bit pattern as a genuine integer. Integer overflow in the multiply
-  -- wraps two's-complement, which is exactly what FNV-1a wants, and `>>`
-  -- is a logical shift, so the fold works on the negative value too.
   local h = 0x811C9DC5
   for i = 1, #bid do
     h = (h ~ bid:byte(i)) & 0xFFFFFFFF
@@ -325,123 +181,75 @@ local function derive_beacon_id()
   end
   return ((h >> 24) ~ (h >> 16) ~ (h >> 8) ~ h) & 0xFF
 end
-
 function on_enter(root)
-  -- Default 0 on every read: an unprovisioned or wiped badge transmits
-  -- OPT-OUT. Opt-in is something the wearer does, never a default.
   st.consent = clamp(badge.store.get_int("consent", 0), 0, 1)
   st.timing = clamp(badge.store.get_int("timing", DEFAULT_TIMING), 1, #TIMING_MS)
   st.leds_on = badge.store.get_int("leds", 1) == 1
   st.beacon_id = derive_beacon_id()
   build_frame()
-
-  -- bg/bcn cover the TRUE panel so any unused area is BLACK, not white.
   ui.bg = badge.ui.box(root, badge.ui.screen_width, badge.ui.screen_height)
   ui.bg:set_pos(0, 0)
   ui.bg:style({ bg_color = 0x000000, radius = 0, border_width = 0, pad_all = 0 })
-
-  -- Both screens are built here and one is hidden. There is no pcall on this
-  -- badge, so a stale widget reference in on_tick is an unrecoverable kill;
-  -- destroy-and-rebuild would buy ~1.5 KB of a 48 KB heap for exactly that
-  -- bug class. Every widget on_tick touches is created unconditionally.
   ui.bcn = badge.ui.box(ui.bg, badge.ui.screen_width, badge.ui.screen_height)
   ui.bcn:set_pos(0, 0)
   ui.bcn:style({ bg_color = 0x000000, radius = 0, border_width = 0, pad_all = 0 })
-
-  -- The white border is a full-screen white box UNDERNEATH, not set_border()
-  -- plus pad_all: two absolutely positioned siblings cannot be wrong about
-  -- inset semantics. It also means a symbol change dirties only the 272x192
-  -- child (~21 ms of SPI at 40 MHz, 21% duty at 100 ms) and LVGL never
-  -- re-sends the frame.
   ui.frame = badge.ui.box(ui.bcn, SCREEN_W, SCREEN_H)
   ui.frame:set_pos(POS_X, POS_Y)
   ui.frame:style({ bg_color = WHITE, radius = 0, border_width = 0, pad_all = 0 })
-
   ui.blink = badge.ui.box(ui.bcn, IN_W, IN_H)
   ui.blink:set_pos(POS_X + BORDER, POS_Y + BORDER)
   ui.blink:style({ bg_color = 0x000000, radius = 0, border_width = 0, pad_all = 0 })
   ui.blink:bring_to_front()
   ui.bcn:hidden(true)
-
-  -- Fonts are 14 and 24 only: the sizes the shipping app already proved exist
-  -- in this LVGL build. 24 px is plenty at arm's length, which is the whole
-  -- requirement -- the camera never reads this screen.
   ui.cfg = badge.ui.box(ui.bg, SCREEN_W, SCREEN_H)
   ui.cfg:set_pos(0, 0)
   ui.cfg:style({ bg_color = 0x101014, radius = 0, border_width = 0, pad_all = 0 })
-
   local who = badge.me.name()
   ui.c_name = badge.ui.label(ui.cfg, type(who) == "string" and who or "unprovisioned")
   ui.c_name:set_pos(12, 8)
   ui.c_name:style({ text_color = 0xE5E7EB, text_font = 24 })
-
   ui.c_id = badge.ui.label(ui.cfg, "")
   ui.c_id:set_pos(12, 44)
   ui.c_id:style({ text_color = WHITE, text_font = 24 })
-
   ui.c_cons = badge.ui.label(ui.cfg, "")
   ui.c_cons:set_pos(12, 80)
   ui.c_cons:style({ text_font = 24 })
-
   ui.c_rate = badge.ui.label(ui.cfg, "")
   ui.c_rate:set_pos(12, 116)
   ui.c_rate:style({ text_color = 0x9CA3AF, text_font = 14 })
-
   ui.c_keys = badge.ui.label(ui.cfg, "A opt  B rate  L led  R radio")
   ui.c_keys:set_pos(12, 146)
   ui.c_keys:style({ text_color = 0x6B7280, text_font = 14 })
-
   ui.c_go = badge.ui.label(ui.cfg, "START = BEACON")
   ui.c_go:set_pos(12, 168)
   ui.c_go:style({ text_color = 0xFFBD00, text_font = 24 })
-
   ui.c_ban = badge.ui.label(ui.cfg, "")
   ui.c_ban:set_pos(12, 206)
   ui.c_ban:style({ text_font = 14 })
   ui.c_ban:hidden(true)
-
   refresh_config()
   led_consent()
-
-  -- Boot into CONFIG: the beacon is something you arm. A reboot mid-demo
-  -- therefore leaves the badge dark to the camera, which reads as "no beacon"
-  -- and so as "blur". That is the correct failure.
   st.t0 = badge.sys.ms()
   st.last_slot = -1
 end
-
 function on_tick()
   local now = badge.sys.ms()
-
   if st.screen == 2 then
-    -- Derived from the wall clock, never a tick counter: on_tick is nominal
-    -- 20 ms and explicitly not guaranteed, and a full-screen flush can
-    -- overrun one tick. Late ticks shift an edge; they never let the schedule
-    -- drift. badge.sys.ms() returns an integer, so `//` stays integer and the
-    -- `%` below never sees a float.
     local slot = (now - st.t0) // symbol_ms()
     if slot ~= st.last_slot then
       st.last_slot = slot
       ui.blink:style({ bg_color = st.frame[(slot % SYMBOLS) + 1] })
     end
   end
-
   if st.note_on and now >= st.note_until then
     st.note_on = false
     ui.c_ban:hidden(true)
     led_consent()
   end
 end
-
 function on_button(button, kind)
   if kind ~= PRESSED then return end
   local now = badge.sys.ms()
-
-  -- BEACON screen: ANY key returns to config, loudly. Restricting keys is the
-  -- worse trade -- a wearer who wants to stop broadcasting must always be able
-  -- to -- so instead the stop is impossible to miss: flashing ends, large text
-  -- returns, amber banner and amber LEDs hold for 2.5 s. A live film alert
-  -- outranks the banner and is left alone.
   if st.screen == 2 then
     show_config()
     if now >= st.note_until then
@@ -449,28 +257,22 @@ function on_button(button, kind)
     end
     return
   end
-
   if button == BUTTON.A then
     st.consent = (st.consent == 1) and 0 or 1
     badge.store.set("consent", st.consent)
     build_frame()
     led_consent()
-    -- The badge holds no keypair and cannot sign: this is a REQUEST the
-    -- registry client signs and submits.
     radio_send(RADIO_TAG .. "R" .. hex2(st.beacon_id) .. tostring(st.consent))
     refresh_config()
-
   elseif button == BUTTON.B then
     st.timing = (st.timing % #TIMING_MS) + 1
     badge.store.set("timing", st.timing)
     refresh_config()
-
   elseif button == BUTTON.LEFT then
     st.leds_on = not st.leds_on
     badge.store.set("leds", st.leds_on and 1 or 0)
     led_consent()
     refresh_config()
-
   elseif button == BUTTON.RIGHT then
     if st.radio_on then
       st.radio_on = false
@@ -481,17 +283,13 @@ function on_button(button, kind)
       radio_start()
     end
     refresh_config()
-
   elseif button == BUTTON.START then
-    -- SAVE, then arm. store.set writes NVS flash and can block tens of ms, so
-    -- it happens here and never in on_tick.
     badge.store.set("consent", st.consent)
     badge.store.set("timing", st.timing)
     badge.store.set("leds", st.leds_on and 1 or 0)
     show_beacon()
   end
 end
-
 function on_exit()
   badge.led.clear()
   badge.led.show()
