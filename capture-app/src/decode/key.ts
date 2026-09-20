@@ -77,11 +77,12 @@ export interface KeyDebug {
   candidates: KeyCandidate[];
   tracks: { cx: number; cy: number; lastId: number | null; sinceDecodeMs: number; missed: number }[];
   ms: number; // decode time
+  locateMs: number; // …of which localization (mask + clusters)
 }
 
 // ---- 1. mask ------------------------------------------------------------------
 // Reused buffers, one set per frame size (the coarse frame and the fine crops).
-type Bufs = { n: number; w: number; chroma: Uint8Array; cls: Uint8Array; dom: Uint8Array; sat: Uint32Array; mask: Uint8Array; seen: Uint8Array };
+type Bufs = { n: number; w: number; chroma: Uint8Array; cls: Uint8Array; dom: Uint8Array; wht: Uint8Array; sat: Uint32Array; mask: Uint8Array; seen: Uint8Array };
 const bufCache = new Map<string, Bufs>();
 function bufs(W: number, H: number): Bufs {
   const k = `${W}x${H}`;
@@ -89,7 +90,7 @@ function bufs(W: number, H: number): Bufs {
   if (!b) {
     if (bufCache.size > 6) bufCache.clear();
     const n = W * H;
-    b = { n, w: W, chroma: new Uint8Array(n), cls: new Uint8Array(n), dom: new Uint8Array(n), sat: new Uint32Array((W + 1) * (H + 1)), mask: new Uint8Array(n), seen: new Uint8Array(n) };
+    b = { n, w: W, chroma: new Uint8Array(n), cls: new Uint8Array(n), dom: new Uint8Array(n), wht: new Uint8Array(n), sat: new Uint32Array((W + 1) * (H + 1)), mask: new Uint8Array(n), seen: new Uint8Array(n) };
     bufCache.set(k, b);
   }
   return b;
@@ -98,8 +99,9 @@ function bufs(W: number, H: number): Bufs {
 /** Local-contrast chroma mask. `win` = top-hat half-window in px. */
 function litMask(f: Frame, win: number, B: Bufs): void {
   const { width: W, height: H, data } = f;
-  const { chroma, cls, dom, sat, mask } = B;
+  const { chroma, cls, dom, wht, sat, mask } = B;
   const n = W * H;
+  const WT = flags.KEY_LED_WHITE_T;
   for (let i = 0, o = 0; i < n; i++, o += 4) {
     const r = data[o], g = data[o + 1], b = data[o + 2];
     const cool = ((g + b) >> 1) - r; // mint / green / cyan / blue
@@ -109,6 +111,7 @@ function litMask(f: Frame, win: number, B: Bufs): void {
     cls[i] = cool >= warm ? 1 : 2;
     const m = r > g ? (r > b ? r : b) : (g > b ? g : b);
     dom[i] = m;
+    wht[i] = (r < g ? (r < b ? r : b) : (g < b ? g : b)) > WT ? 1 : 0; // a saturated-white core: an LED at full drive
   }
   // summed-area table of the chroma channel → O(1) box means
   const SW = W + 1;
@@ -171,7 +174,18 @@ function components(B: Bufs, W: number, H: number): Comp[] {
         }
       }
     }
-    if (c.n >= flags.KEY_MIN_PX) out.push(c);
+    if (c.n < flags.KEY_MIN_PX) continue;
+    // An LED at full drive is a round chromatic halo around a saturated-white
+    // core; no key part is round (bars are 0.34 or 2.2, digits ~0.5, a whole
+    // key ≥ 1.1) and a key part's clipped centre still keeps R well below the
+    // others. Drop such blobs before they can join the digits.
+    const w = c.x1 - c.x0 + 1, h = c.y1 - c.y0 + 1;
+    if (Math.min(w, h) >= flags.KEY_LED_MIN_PX && w / h >= flags.KEY_LED_ASPECT_MIN && w / h <= flags.KEY_LED_ASPECT_MAX) {
+      let white = 0;
+      for (let y = c.y0; y <= c.y1; y++) for (let x = c.x0; x <= c.x1; x++) white += B.wht[y * W + x];
+      if (white >= flags.KEY_LED_CORE_FRAC * w * h) continue;
+    }
+    out.push(c);
   }
   return out;
 }
@@ -432,23 +446,31 @@ export const tophatWin = (frameW: number): number => Math.max(2, Math.round(fram
 
 export class KeyDecoder {
   private tracks: KTrack[] = [];
-  debug: KeyDebug = { width: 0, height: 0, candidates: [], tracks: [], ms: 0 };
+  debug: KeyDebug = { width: 0, height: 0, candidates: [], tracks: [], ms: 0, locateMs: 0 };
 
   decode(f: Frame, tMs: number, sampler?: RegionSampler): BeaconReading[] {
-    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const dbg: KeyDebug = { width: f.width, height: f.height, candidates: [], tracks: [], ms: 0 };
+    const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const t0 = now();
+    const dbg: KeyDebug = { width: f.width, height: f.height, candidates: [], tracks: [], ms: 0, locateMs: 0 };
     const fits: KeyFit[] = [];
+    const clusters = locateKeys(f, tophatWin(f.width));
+    dbg.locateMs = now() - t0;
     let tried = 0;
-    for (const cl of locateKeys(f, tophatWin(f.width))) {
+    for (const cl of clusters) {
       const b = cl.box;
       let status: string;
       let fit: KeyFit | null = null;
       if (b.w < flags.KEY_MIN_W) status = `too small (${b.w} px < ${flags.KEY_MIN_W})`;
       else if (b.w / b.h < flags.KEY_ASPECT_MIN || b.w / b.h > flags.KEY_ASPECT_MAX) status = `not digit-shaped (aspect ${(b.w / b.h).toFixed(2)})`;
+      else if (tried >= flags.KEY_MAX_FITS) status = `not tried (${flags.KEY_MAX_FITS} larger candidates first)`; // a fit is the expensive part
       else {
-        // native-res crop of the cluster (with room for the unlit border segments) — many more px per segment far away
-        if (sampler && b.w < flags.KEY_FINE_BELOW_PX) fit = this.fitFine(f, cl, sampler);
-        if (!fit) fit = fitCluster(f, cl, undefined, tried < flags.KEY_TRIM_CANDIDATES ? flags.KEY_TRIM_MAX : 0);
+        const trim = tried < flags.KEY_TRIM_CANDIDATES ? flags.KEY_TRIM_MAX : 0;
+        // native-res crop of the cluster (with room for the unlit border segments): many
+        // more px per segment far away, and at close range the clusterer gets a second,
+        // sharper look. Only when no matching cluster exists in the crop do we fall back
+        // to the coarse frame — a second full fit on the same pixels would just double the cost.
+        const fine = sampler ? this.fitFine(f, cl, sampler, trim) : null;
+        fit = fine ? fine.fit : fitCluster(f, cl, undefined, trim);
         tried++;
         status = fit ? `${hex2(fit.id)} ${fit.optIn ? "OPT-IN" : "OPT-OUT"} · margin ${fit.margin.toFixed(2)}` : `${cl.cls === 1 ? "mint" : "rose"} blob, no key read (${b.w} px)`;
       }
@@ -480,13 +502,17 @@ export class KeyDecoder {
         out.push({ beaconId: hex2(tr.lastId), imagePosition: { x: tr.cx / f.width, y: tr.cy / f.height }, confidence: 1, optIn: tr.lastOptIn });
       }
     }
-    dbg.ms = (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0;
+    dbg.ms = now() - t0;
     this.debug = dbg;
     return out;
   }
 
-  /** Re-localize and fit on a native-res crop around the cluster; the fit's box is mapped back to coarse px. */
-  private fitFine(f: Frame, cl: KeyCluster, sampler: RegionSampler): KeyFit | null {
+  /**
+   * Re-localize and fit on a native-res crop around the cluster; the fit's box
+   * is mapped back to coarse px. null = no crop / no matching cluster in it
+   * (the caller then fits the coarse frame); otherwise the crop's verdict stands.
+   */
+  private fitFine(f: Frame, cl: KeyCluster, sampler: RegionSampler, trim: number): { fit: KeyFit | null } | null {
     const b = cl.box;
     // room for: an unlit left column ('1' first: w−t = 23% of the span), a trailing '1' the coarse
     // clusterer may have left out (its bars sit 72 units = 28% past the previous digit), unlit top/bottom bars (11%)
@@ -503,8 +529,8 @@ export class KeyDecoder {
       if (o > po) { po = o; pick = c; }
     }
     if (!pick) return null;
-    const fit = fitCluster(crop, pick);
-    if (!fit) return null;
-    return { ...fit, key: { x: rx + fit.key.x / kx, y: ry + fit.key.y / ky, w: fit.key.w / kx, h: fit.key.h / ky } };
+    const fit = fitCluster(crop, pick, undefined, trim);
+    if (!fit) return { fit: null };
+    return { fit: { ...fit, key: { x: rx + fit.key.x / kx, y: ry + fit.key.y / ky, w: fit.key.w / kx, h: fit.key.h / ky } } };
   }
 }

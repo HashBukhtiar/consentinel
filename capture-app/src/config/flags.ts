@@ -84,9 +84,14 @@ export const flags = {
   KEY_REFINE_ITERS: 8, // coordinate-descent steps per phase (1 px, then 0.5 px) per edge
   KEY_MARGIN: 0.2, // every sample at least this far (× contrast) from the lit/dark midpoint
   KEY_RIVAL_FRAC: 0.7, // a second id whose margin is ≥ this × the best one's ⇒ ambiguous ⇒ no reading
-  KEY_TRIM_MAX: 6, // when a cluster fails to fit, peel up to this many brightness-deviant members (one at a time) and retry (junk stuck to the key)
-  KEY_TRIM_CANDIDATES: 3, // …but only for the largest few clusters per frame (a retry is a full fit)
-  KEY_FINE_BELOW_PX: 240, // fit on a native-res crop when the lit extent is narrower than this (coarse px)
+  KEY_TRIM_MAX: 4, // when a cluster fails to fit, peel up to this many brightness-deviant members (one at a time) and retry (junk stuck to the key)
+  KEY_TRIM_CANDIDATES: 2, // …but only for the largest few clusters per frame (a retry is a full fit)
+  KEY_MAX_FITS: 4, // fits per frame, largest candidates first (measured ~3–5 ms each at 1280 with retries)
+  KEY_LED_WHITE_T: 235, // every channel above this = a saturated-white core (an LED at full drive)
+  KEY_LED_MIN_PX: 8, // LED filter applies to blobs at least this thick…
+  KEY_LED_ASPECT_MIN: 0.7, // …that are round-ish (no key part is: bars 0.34 / 2.2, digits ~0.5, a whole key ≥ 1.1)…
+  KEY_LED_ASPECT_MAX: 1.4,
+  KEY_LED_CORE_FRAC: 0.06, // …and whose box is at least this much saturated white
   KEY_CONFIRM_N: 2, // decodes of the same id+consent within BEACON_CONFIRM_MS before it is reported
   // seq decoder knobs (measured on data/diag 2026-09-20, 1.5 m, 20 fps):
   SEQ_DIFF_T: 60, // sum |ΔR|+|ΔG|+|ΔB| between consecutive frames that counts as "changed" (badge symbol changes measure 40–400; sensor noise ~20)
@@ -117,6 +122,13 @@ export const flags = {
   BEACON_CONFIRM_MS: 4000, // an id must decode twice within this window to be trusted.
   // MUST exceed 2 x FRAME_MS (900 ms): at the old 1500 a 9-symbol frame could
   // never confirm twice and every badge stayed blurred forever.
+
+  // Second detector pass on a rotating 60% quadrant (one per frame, all four
+  // every four frames): BlazeFace short-range looks at a 128 px letterbox, so a
+  // face 2 m behind the wearer (~5% of the frame) is invisible to the full-frame
+  // pass; a quadrant crop makes it 1.7x bigger. The tracker bridges the frames
+  // between visits (TRACK_MAX_MISSED). Costs one extra inference per frame.
+  DETECT_TILES: (env.VITE_DETECT_TILES ?? "1") !== "0",
 
   // vision/perf (mine)
   // detection + decode input width; higher = badges decode from farther (costs CPU).
@@ -149,6 +161,11 @@ export const flags = {
   // holds at any camera distance — an absolute normalized cap does not.
   BIND_MAX_FACE_HEIGHTS: 3.0,
   BIND_AMBIGUOUS_RATIO: 1.25, // runner-up within 25% of the winner ⇒ bind neither
+  // A badge hangs UNDER its wearer's face: sideways offset counts triple in the
+  // distance, and a face more than one face-height to the side is not eligible
+  // at all — the person leaning in beside the wearer never wins the badge.
+  BIND_DX_WEIGHT: 3.0,
+  BIND_MAX_DX_FACE_HEIGHTS: 1.0,
   // How long a binding vouches for a face after the last sighting of its
   // beacon. Stacks on top of BEACON_ID_HOLD_MS (the decoder keeps reporting a
   // decoded id for that long), so true worst-case staleness is the sum — drop
