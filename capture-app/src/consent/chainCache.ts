@@ -79,7 +79,7 @@ export class ChainConsentCache {
 
   constructor(
     rpcUrl: string = flags.SOLANA_RPC_URL,
-    private opts: { autoFetch?: boolean; cluster?: Cluster; now?: () => number } = {},
+    private opts: { autoFetch?: boolean; cluster?: Cluster; now?: () => number; onUnknown?: (id: string) => void } = {},
   ) {
     this.now = opts.now ?? (() => Date.now());
     this.connection = new Connection(rpcUrl, { commitment: "confirmed" });
@@ -311,6 +311,7 @@ export class ChainConsentCache {
         } else {
           this.notBefore.set(id, this.now() + NEGATIVE_TTL_MS);
           this.note("info", `${id} has no on-chain record ⇒ blur (fail-safe)`, id);
+          this.opts.onUnknown?.(id); // e.g. ask the organizer service to enrol it
         }
         this.emit();
       })

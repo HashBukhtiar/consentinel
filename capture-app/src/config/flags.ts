@@ -22,6 +22,8 @@ export const flags = {
   FILM_EVENT_ENDPOINT: env.VITE_FILM_EVENT_ENDPOINT ?? "http://localhost:8787/film-event", // "" ⇒ local log only
   SERVICE_TOKEN: env.VITE_SERVICE_TOKEN ?? "", // must match the service's SERVICE_TOKEN when set
   SERVICE_WS_URL: env.VITE_SERVICE_WS_URL ?? "ws://localhost:8787/operator", // alerts + attestations feed
+  // a decoded badge with no record ⇒ ask the service to register it as opt_out (its card then appears)
+  AUTO_REGISTER_UNKNOWN: (env.VITE_AUTO_REGISTER ?? "1") !== "0",
   FILM_EVENT_DEBOUNCE_MS: 5000,
 
   // owned by A — shared contract value

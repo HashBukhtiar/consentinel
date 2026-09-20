@@ -1,5 +1,5 @@
 {
-  "_comment": "Demo seed for the on-chain registry. Badge ids are what the beacons blink (8-bit, two upper-case hex digits \u2014 see shared/beacon.ts). `consent` is the initial on-chain state; flip it live on stage.",
+  "_comment": "Demo seed for the on-chain registry. Badge ids are what the beacons blink (8-bit, two upper-case hex digits \u2014 the ID shown on the badge screen). `consent` is the initial on-chain state; flip it live on stage. Badges not listed here are auto-registered as opt_out by the service the first time a camera sees them.",
   "cluster": "devnet",
   "cameraLabel": "cam-1",
   "eventId": "htn2026-demo",
@@ -18,6 +18,11 @@
       "badgeId": "C3",
       "consent": true,
       "label": "consenting badge (stub/synthetic) \u2014 opted IN (clear)"
+    },
+    {
+      "badgeId": "3D",
+      "consent": false,
+      "label": "physical demo badge (the ID on its screen) \u2014 opted OUT (blurred)"
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { signConsentMessage, type ConsentView, type TxSigner } from "../../../registry/client/src/registry";
 import { defaultExpiresAt, explorerUrl } from "../../../registry/client/src/core";
@@ -24,6 +24,14 @@ export function ChainPanel({ cache }: { cache: ChainConsentCache }) {
 
   const [keys, setKeys] = useState<DemoKeys | null>(null);
   useEffect(() => { let on = true; loadDemoKeys().then((k) => { if (on) setKeys(k); }); return () => { on = false; }; }, []);
+  // an auto-enrolled badge's key lands in the demo key file after the page loaded: re-read it when a record has no signer
+  const keyReload = useRef(0);
+  const ownerless = cache.records().some((r) => !keys?.owners.has(r.owner));
+  useEffect(() => {
+    if (!ownerless || Date.now() - keyReload.current < 5000) return;
+    keyReload.current = Date.now();
+    void loadDemoKeys().then((k) => { if (k) setKeys(k); });
+  }, [ownerless, cache.status.lastSyncAt]);
   const wallet = useMemo(() => detectWallet(), []);
   const [walletErr, setWalletErr] = useState("");
   const [delegated, setDelegated] = useState(true); // the badge-signed path is the real one; default to it

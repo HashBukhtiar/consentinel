@@ -76,7 +76,9 @@ Read the current values first: `GET /badge/4E/consent` →
 ```
 
 An unregistered badge gets `{"registered":false,...}` ⇒ the capture app blurs
-it (fail-safe); ask the organizer to `npm run seed` it.
+it (fail-safe). The capture app reports such ids to `POST /badge/<id>/seen`,
+and the service (holding the organizer/issuer key, `AUTO_REGISTER=true`)
+registers them as opt_out — so a badge only has to be seen once.
 
 Message bytes (little-endian):
 

@@ -5,6 +5,7 @@
 //   GET  /health                  flags + subsystem state
 //   GET  /badge/:id/pending       badge poll transport (drains the queue)
 //   GET  /badge/:id/consent       badge reads its own on-chain state (+ nonce/instance/serverTime to sign)
+//   POST /badge/:id/seen          capture app saw an id with no record → issuer auto-registers it as opt_out (Bearer SERVICE_TOKEN if set)
 //   POST /consent/delegated       badge-signed consent update, relayed on-chain (signature-verified; open)
 //   GET  /audit/events?badge=A1B2 the off-chain log (Bearer SERVICE_TOKEN if set) — for the audit layer
 //   GET  /audit/verify            local log recomputed vs on-chain head (hashes only; open)
@@ -24,6 +25,7 @@ import { BadgeHub, norm } from "./badges";
 import { Voice, alertText } from "./voice";
 import { Chain, HttpError } from "./chain";
 import { RadioBridge } from "./radio";
+import { Enroller } from "./enroll";
 import { explorerUrl } from "../../registry/client/src/core";
 
 const log = (m: string) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
@@ -61,6 +63,7 @@ await chain.init();
 // up and becomes a badge-signed, relayed transaction.
 const radio = new RadioBridge(chain, broadcast, log);
 radio.start(config.RADIO_SYNC_MS);
+const enroller = new Enroller(chain, broadcast, log);
 let logsSubscribed = false;
 try {
   chain.reg.onLogs((n) => {
@@ -129,6 +132,7 @@ function health() {
     relayer: chain.relayer?.publicKey.toBase58() ?? null,
     badges: badges.status(),
     radio: { ...radio.status(), logsSubscribed, syncMs: config.RADIO_SYNC_MS },
+    autoRegister: enroller.status(),
     operators: operators.size,
   };
 }
@@ -206,6 +210,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     let m: RegExpMatchArray | null;
     if ((m = p.match(/^\/badge\/([0-9a-fA-F]{1,4})\/pending$/)) && req.method === "GET") return json(200, { beaconId: norm(m[1]), pending: badges.drain(m[1]) });
+    if ((m = p.match(/^\/badge\/([0-9a-fA-F]{1,4})\/seen$/)) && req.method === "POST") {
+      if (!authorized(req)) return json(401, { error: "missing or wrong bearer token" });
+      return json(200, await enroller.seen(m[1]));
+    }
     if ((m = p.match(/^\/badge\/([0-9a-fA-F]{1,4})\/consent$/)) && req.method === "GET") {
       const rec = await chain.reg.fetchConsent(m[1]);
       const serverTime = Math.floor(Date.now() / 1000);
@@ -277,6 +285,7 @@ server.listen(config.PORT, () => {
   console.log(`  audit     ${h.audit.events} events, ${h.attest.batches} batches in ${config.AUDIT_LOG}${h.audit.unanchored ? `  (${h.audit.unanchored} unanchored)` : ""}`);
   console.log(`  auth      token ${config.SERVICE_TOKEN ? "required" : "not set (open)"}; CORS ${config.CORS_ORIGIN}`);
   console.log(`  radio     bridge ws://localhost:${config.PORT}/bridge · GET /bridge/pending · POST /bridge/uplink  (keys ${config.BADGE_KEYS_DIR}; chain push ${logsSubscribed ? "on" : "off"})`);
+  console.log(`  enrol     auto-register first-seen badges as opt_out: ${enroller.enabled ? "on" : "OFF"} (issuer key ${config.ISSUER_KEYPAIR}${existsSync(config.ISSUER_KEYPAIR) ? "" : " — missing"})`);
   if (chain.relayer) {
     chain.conn.getBalance(chain.relayer.publicKey)
       .then((b) => { if (b < 0.01e9) console.log(`  !! relayer balance ${(b / 1e9).toFixed(3)} SOL — fund it or badge-signed updates will fail`); })
