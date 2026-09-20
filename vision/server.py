@@ -36,6 +36,7 @@ try:
     from websockets.asyncio.server import serve
 except ImportError:  # websockets < 13
     from websockets.server import serve  # type: ignore
+from websockets.exceptions import ConnectionClosed
 
 HERE = Path(__file__).parent
 CLASS_KEY = 16
@@ -196,6 +197,13 @@ async def main():
 
     async def handle(ws):
         peer = getattr(ws, "remote_address", "?")
+        n = 0
+        try:
+            await _serve(ws, peer)
+        except ConnectionClosed:
+            pass  # the browser closed the tab / stopped the pipeline: not an error
+
+    async def _serve(ws, peer):
         n = 0
         async for msg in ws:
             if not isinstance(msg, (bytes, bytearray)) or len(msg) < 9:
