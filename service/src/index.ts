@@ -249,7 +249,11 @@ function readJson(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const p = url.pathname;
-  res.setHeader("access-control-allow-origin", config.CORS_ORIGIN);
+  // CORS_ORIGIN may list several browser origins (comma-separated); the one the
+  // request came from is reflected, so localhost and the demo hostname both work.
+  const allowed = config.CORS_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean);
+  const origin = String(req.headers.origin ?? "");
+  res.setHeader("access-control-allow-origin", allowed.includes(origin) ? origin : allowed[0] ?? "");
   res.setHeader("access-control-allow-headers", "content-type, authorization");
   res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
   res.setHeader("vary", "origin");
