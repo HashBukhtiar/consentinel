@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { signConsentMessage, type ConsentView, type TxSigner } from "../../../registry/client/src/registry";
 import { channelNames, defaultExpiresAt, explorerUrl } from "../../../registry/client/src/core";
 import type { ChainConsentCache } from "../consent/chainCache";
+import { Glyph } from "./Glyph";
 import { detectWallet, loadDemoKeys, walletSigner, type DemoKeys, type WalletProvider } from "../consent/signers";
 import { flags } from "../config/flags";
 
@@ -112,6 +113,7 @@ export function ChainPanel({ cache, names = new Map() }: { cache: ChainConsentCa
           <div className="rec" key={r.badgeId}>
             <div className="rec-main">
               <div className="rec-id">
+                <Glyph id={r.badgeId} tone={effective ? "opt_in" : "opt_out"} size={36} />
                 <b>{r.badgeId}</b>
                 <span className={"pill " + (effective ? "opt_in" : "opt_out")}>{effective ? "opt-in" : "opt-out"}</span>
                 {ov && <span className="muted small" title={`per-event override for ${flags.EVENT_ID}; base consent is ${r.consent ? "opt-in" : "opt-out"}`}>event override</span>}
@@ -129,8 +131,8 @@ export function ChainPanel({ cache, names = new Map() }: { cache: ChainConsentCa
             </div>
             <div className="rec-meta">
               {s ? <span className="muted">signs with {s.via}</span> : <span className="warn">no signer for this owner</span>}
-              <span className="muted"> · rev {r.revision} · {ago(r.updatedAt * 1000)}</span>
-              {keys?.labels.get(r.badgeId) && <span className="muted"> · {keys.labels.get(r.badgeId)}</span>}
+              <span className="muted">rev {r.revision}, {ago(r.updatedAt * 1000)}</span>
+              {keys?.labels.get(r.badgeId) && <span className="muted">{keys.labels.get(r.badgeId)}</span>}
               {b && (b.url
                 ? <a className="status" href={b.url} target="_blank" rel="noreferrer">{b.text} ↗</a>
                 : <span className={"status" + (b.err ? " err" : "")}>{b.text}</span>)}
@@ -148,6 +150,7 @@ export function ChainPanel({ cache, names = new Map() }: { cache: ChainConsentCa
           <div className="rec" key={c.address}>
             <div className="rec-main">
               <div className="rec-id">
+                <Glyph id={c.badgeId} tone="opt_out" size={30} />
                 <b>{c.badgeId}</b>
                 <span className={"pill " + (told ? "opt_in" : "opt_out")}>{told ? "notified" : "pending"}</span>
                 {who && <span className="muted small">{who}</span>}
@@ -155,7 +158,7 @@ export function ChainPanel({ cache, names = new Map() }: { cache: ChainConsentCa
               <a href={explorerUrl("address", c.address, st.cluster)} target="_blank" rel="noreferrer" title={`notice account ${c.address} — badge id and timestamps only, no name`}>record ↗</a>
             </div>
             <div className="rec-meta">
-              <span className="muted">filmed {clock(c.filmedAt)} · filed {clock(c.recordedAt)} · {told ? `told ${clock(c.notifiedAt)} via ${channelNames(c.channels).join(", ")}` : "not told yet"}</span>
+              <span className="muted">filmed {clock(c.filmedAt)}, filed {clock(c.recordedAt)}, {told ? `told ${clock(c.notifiedAt)} via ${channelNames(c.channels).join(", ")}` : "not told yet"}</span>
             </div>
           </div>
         );

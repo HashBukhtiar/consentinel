@@ -3,6 +3,7 @@ import { consentStore } from "../stubs/consentStore";
 import { chain } from "../consent/store";
 import { operatorLink, type NoticeMsg, type OperatorMessage } from "../events/operatorLink";
 import { ChainPanel } from "./ChainPanel";
+import { Glyph } from "./Glyph";
 import type { FilmEvent, Track } from "../shared/schema";
 
 // The demo surface: who's in frame, what consent says on-chain, and what was
@@ -86,7 +87,7 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
     if (!chain) return { text: "stub", cls: "oc-muted" };
     if (chain.stale) return { text: "cache stale", cls: "oc-warn" };
     const r = recs.find((x) => x.badgeId.toUpperCase() === id.toUpperCase());
-    return r ? { text: `registered · rev ${r.revision}`, cls: "oc-ok" } : { text: "not registered", cls: "oc-no" };
+    return r ? { text: `registered, rev ${r.revision}`, cls: "oc-ok" } : { text: "not registered", cls: "oc-no" };
   };
 
   // Step 2, made visible: did the notification reach the right badge?
@@ -108,7 +109,7 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
               const oc = onChain(t.beaconId);
               return (
                 <tr key={t.trackId}>
-                  <td>{t.beaconId ?? <span className="muted">none</span>}</td>
+                  <td><Glyph id={t.beaconId} tone={t.beaconId ? (t.consent === "opt_in" ? "opt_in" : t.consent === "opt_out" ? "opt_out" : "unknown") : "none"} size={24} /></td>
                   <td className={"oc " + oc.cls}>{oc.text}</td>
                   <td className={"c-" + t.consent}>{t.consent.replace("_", "-")}</td>
                   <td><span className={"state " + (t.blurred ? "blurred" : "clear")}>{t.blurred ? "blurred" : "clear"}</span></td>
@@ -125,7 +126,7 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
         <ChainPanel cache={chain} names={names} />
       ) : (
         <>
-          <h3>Consent <span className="muted">stub · no network</span></h3>
+          <h3>Consent <span className="muted">stub, no network</span></h3>
           {(() => {
             const stored = consentStore.all().map(([id]) => id);
             const seen = tracks.map((t) => t.beaconId).filter((x): x is string => !!x);
@@ -134,7 +135,7 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
               const c = consentStore.get(id);
               return (
                 <div className="row" key={id}>
-                  <span className="mono">{id}{!stored.includes(id) && <em className="muted"> · new</em>}</span>
+                  <span className="mono">{id}{!stored.includes(id) && <em className="muted"> new</em>}</span>
                   <button className={"toggle " + c} onClick={() => consentStore.toggle(id)}>{c.replace("_", "-")}</button>
                 </div>
               );
@@ -152,7 +153,7 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
         return (
           <div className="event" key={e.eventId}>
             <div>
-              <span className="mono">{e.beaconId}</span>
+              <Glyph id={e.beaconId} tone="opt_out" size={22} />
               {name && <span className="name">{name}</span>}
               <span className="muted">captured while opted out</span>
               {n === "notified" && <span className="tagx ok" title="the film-event reached this badge">notified</span>}
@@ -179,11 +180,11 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
       {!events.length && <div className="empty-row">No opted-out captures yet</div>}
 
       <details className="debug">
-        <summary>Evidence ledger <span className="muted">Thru Alphanet{ledger.length ? ` · ${ledger.length}` : ""}</span></summary>
+        <summary>Evidence ledger <span className="muted">Thru Alphanet{ledger.length ? `, ${ledger.length}` : ""}</span></summary>
         {ledger.map((r) => (
           <div className="act" key={r.seed}>
             <span className="t">{time(r.at)}</span>
-            <span className="x">{r.kind === "film-event" ? `capture ${r.eventId?.slice(0, 8)}` : `checkpoint #${r.batch}`} <span className="muted">· {(r.ms / 1000).toFixed(1)}s</span></span>
+            <span className="x">{r.kind === "film-event" ? `capture ${r.eventId?.slice(0, 8)}` : `checkpoint #${r.batch}`} <span className="muted">{(r.ms / 1000).toFixed(1)}s</span></span>
             <a href={r.explorer} target="_blank" rel="noreferrer">account ↗</a>
           </div>
         ))}
@@ -197,7 +198,7 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
           return (
             <div className={"act " + (r.dir === "up" ? "push" : n.err ? "error" : "info")} key={`${r.at}-${i}`}>
               <span className="t">{time(r.at)}</span>
-              <span className="x"><b>{r.dir === "down" ? "↓" : "↑"} {r.frame}</b> · {n.text}</span>
+              <span className="x"><b>{r.dir === "down" ? "↓" : "↑"} {r.frame}</b> {n.text}</span>
               {n.url && <a href={n.url} target="_blank" rel="noreferrer">tx ↗</a>}
             </div>
           );
