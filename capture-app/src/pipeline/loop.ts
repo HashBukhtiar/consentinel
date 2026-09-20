@@ -102,12 +102,13 @@ export class Pipeline {
         // clear windows only for faces with an explicit opt_in. A face the
         // detector never found (profile, motion blur, far, dark) therefore
         // stays covered instead of rendering in full clarity.
-        pixelateAll(dctx, flags.PIXELATE_SIZE);
+        // (flags.PRIVACY_BLUR off ⇒ display the raw frame; decisions still run.)
+        if (flags.PRIVACY_BLUR) pixelateAll(dctx, flags.PIXELATE_SIZE);
         for (const t of tracks) {
           // missed > 0 ⇒ this bbox is a stale guess carried from an earlier
           // frame. Clearing there could reveal whoever has moved into it, so
           // a track we lost sight of this frame gets no window.
-          if (!t.blurred && t.missed === 0) {
+          if (flags.PRIVACY_BLUR && !t.blurred && t.missed === 0) {
             clearWindow(dctx, v, v.videoWidth, v.videoHeight, t.bbox, flags.CLEAR_INSET);
           }
           if (t.beaconId && t.consent === "opt_out") this.emitter.maybeEmit(t.beaconId);

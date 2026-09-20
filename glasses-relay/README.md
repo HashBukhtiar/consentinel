@@ -31,13 +31,12 @@ hardware.
 **Developer Mode** in its settings. Developer Mode switches itself off after a
 glasses firmware update, so don't update right before the demo.
 
-**2. Meta developer account.** Register an app in the [Wearables Developer
-Center](https://developers.meta.com/wearables/) to get a `MetaAppID` and
-`ClientToken`. Developer Mode skips attestation, so the demo works with these
-left empty — the plist references them as build settings (`META_APP_ID`,
-`CLIENT_TOKEN`) so you can fill them in later without editing code. The FAQ says
-full capabilities need residence in a supported country; check that Canada
-qualifies before relying on this path.
+**2. App registration: skip it.** With Developer Mode on, no registered app is
+needed. Meta's FAQ says getting started is just Developer Mode plus adding the
+toolkit, and the sample's plist says `MetaAppID` / `ClientToken` are only
+required *without* Developer Mode (i.e. for publishing, which Developer Preview
+doesn't allow yet). Leave `META_APP_ID` / `CLIENT_TOKEN` unset. The FAQ also says
+full capabilities need residence in a supported country; check that Canada qualifies.
 
 **3. Xcode project.** There's no `.xcodeproj` here — Meta's SDK and sample are
 under their Developer Terms rather than an open-source licence, so nothing of
@@ -69,13 +68,12 @@ theirs is vendored into this repo. Make the project from Xcode's own template:
 
 ## Tuning for beacon decode
 
-`RelayConfig` at the top of `ConsentinelRelayApp.swift`:
-
-```swift
-static let resolution: StreamingResolution = .high   // 720x1280, the SDK's max
-static let frameRate: UInt = 15                      // 2, 7, 15, 24 or 30
-static let jpegQuality: CGFloat = 0.7
-```
+The relay app has **Resolution** (high 720×1280 / medium 504×896 / low 360×640) and
+**FPS** (2 / 7 / 15 / 24 / 30) menus. Changing either while streaming restarts the
+camera with the new setting. The phone's state line shows `cfg` (what was asked for)
+and `got` (the frame size that actually arrived; the SDK may downscale on its own).
+If the stream lags or freezes, go lower. A watchdog also restarts the camera if no
+frame arrives for 4 s. `RelayConfig.jpegQuality` (0.7) is the re-encode quality.
 
 720×1280 is the ceiling, and the SDK silently drops resolution then frame rate
 when Bluetooth bandwidth gets tight — so these are requests, not guarantees.

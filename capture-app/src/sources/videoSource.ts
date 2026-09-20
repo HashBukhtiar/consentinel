@@ -48,15 +48,27 @@ export function startGlasses(url: string): Promise<MediaStream> {
       resolve(stream);
     };
 
-    ws.onmessage = async (e) => {
+    // Decode one frame at a time and keep only the newest waiting — if frames
+    // arrive faster than they paint, queuing them would only add lag.
+    let busy = false;
+    let pending: Blob | null = null;
+    const paint = async (blob: Blob) => {
+      busy = true;
+      try {
+        const bmp = await createImageBitmap(blob);
+        if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+          canvas.width = bmp.width; canvas.height = bmp.height;
+        }
+        ctx.drawImage(bmp, 0, 0);
+        bmp.close();
+      } catch { /* a corrupt frame is dropped; the next one repaints */ }
+      busy = false;
+      if (pending) { const next = pending; pending = null; paint(next); }
+    };
+    ws.onmessage = (e) => {
       // Stop() on the pipeline ends the track; that's our cue to drop the socket.
       if (stream && stream.getVideoTracks()[0]?.readyState === "ended") { ws.close(); return; }
-      const bmp = await createImageBitmap(e.data as Blob);
-      if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
-        canvas.width = bmp.width; canvas.height = bmp.height;
-      }
-      ctx.drawImage(bmp, 0, 0);
-      bmp.close();
+      if (busy) pending = e.data as Blob; else paint(e.data as Blob);
     };
 
     ws.onclose = () => stream?.getTracks().forEach((t) => t.stop());

@@ -23,6 +23,8 @@ export function App() {
   const [glasses, setGlasses] = useState(() => localStorage.getItem("consentinel.glasses") ?? "");
 
   function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }
+  const [privacyBlur, setPrivacyBlur] = useState(flags.PRIVACY_BLUR);
+  function toggleBlur() { flags.PRIVACY_BLUR = !flags.PRIVACY_BLUR; setPrivacyBlur(flags.PRIVACY_BLUR); }
 
   useEffect(() => { listCameras().then(setCameras).catch(() => {}); }, [running]);
   useEffect(() => { startConsent(); }, []); // chain cache runs from page load, independent of the camera
@@ -94,6 +96,10 @@ export function App() {
             <button className={"seg " + decoder} onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")}
               title="stub = fixed demo beacons · optical = decode the real badge">
               Beacon · {decoder}
+            </button>
+            <button className={"seg " + (privacyBlur ? "optical" : "")} onClick={toggleBlur}
+              title="on = pixelate everyone without an opt-in badge · off = show the raw feed (setup only)">
+              Blur · {privacyBlur ? "on" : "off"}
             </button>
             <div className="spacer" />
             {running && <button className="stop" onClick={stop}>Stop</button>}

@@ -138,6 +138,7 @@ function health() {
     voice: { provider: voice.provider, fallback: voice.provider !== "elevenlabs" },
     audit: { path: config.AUDIT_LOG, events: audit.size, receivedThisRun: received, ...audit.expectedHead() },
     attest: a,
+    thru: thru.status(),
     relayer: chain.relayer?.publicKey.toBase58() ?? null,
     badges: badges.status(),
     radio: { ...radio.status(), logsSubscribed, syncMs: config.RADIO_SYNC_MS },

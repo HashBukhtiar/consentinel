@@ -6,6 +6,11 @@ const cluster = (env.VITE_SOLANA_CLUSTER ?? "devnet") as "devnet" | "localnet";
 
 export const flags = {
   DEFAULT_CONSENT: "blur" as const, // fail-safe: unknown/undecoded ⇒ blur
+  // Display only: whether the output frame is actually pixelated. Off shows the
+  // raw feed (handy while setting up a source); consent decisions, tracking and
+  // film events run either way. Flip it live with the header button, or set
+  // VITE_PRIVACY_BLUR=on to start with it on. Turn it ON for any real demo.
+  PRIVACY_BLUR: env.VITE_PRIVACY_BLUR === "on",
   DEMO_FALLBACK_MODE: false, // load a clip instead of a live source
 
   // ---- C: consent registry (Solana) + notify service ----------------------
