@@ -3,15 +3,18 @@ import { consentStore } from "../stubs/consentStore";
 import { chain } from "../consent/store";
 import { operatorLink, type OperatorMessage } from "../events/operatorLink";
 import { ChainPanel } from "./ChainPanel";
-import type { FilmEvent, Track } from "../shared/schema";
+import type { BeaconDebug } from "../decode/beacon";
+import { flags } from "../config/flags";
+import type { BeaconReading, FilmEvent, Track } from "../shared/schema";
 
 // The demo surface: what the operator sees. Consent comes from the
 // Solana-synced cache (ChainPanel) — the stub toggles remain only for
 // CONSENT_SOURCE="stub" (no-network fallback).
 type RadioRow = Extract<OperatorMessage, { type: "radio" }>;
 
-export function OperatorPanel({ fps, source, tracks, events }: {
+export function OperatorPanel({ fps, source, tracks, events, beacons, debug, decoder }: {
   fps: number; source: string; tracks: Track[]; events: FilmEvent[];
+  beacons: BeaconReading[]; debug: BeaconDebug | null; decoder: "stub" | "optical";
 }) {
   const [, force] = useState(0);
   useEffect(() => consentStore.subscribe(() => force((x) => x + 1)), []);
@@ -47,6 +50,25 @@ export function OperatorPanel({ fps, source, tracks, events }: {
   };
   const blurred = tracks.filter((t) => t.blurred).length;
 
+  // Why is nothing decoding? Derived from the decoder's own diagnostics.
+  const beaconHint = (): string | null => {
+    if (decoder === "stub" || beacons.length || !debug || !debug.width) return null;
+    const cands = debug.candidates;
+    if (!cands.length) {
+      return debug.bright < 0.002
+        ? "no bright patch in frame — bring the badge closer (patch ≥ 40 px here), turn the screen to the camera, dim the room"
+        : "bright areas but none shaped like the badge patch (2.3:1 with a white border) — face the screen squarely to the camera, avoid glare";
+    }
+    const best = cands.reduce((a, b) => (b.box.w > a.box.w ? b : a));
+    if (!cands.some((c) => c.confident)) {
+      if (best.box.w < flags.BEACON_MIN_W * 1.8) return `patch found but only ${Math.round(best.box.w)} px wide — move closer or raise the decode resolution`;
+      if (best.borderLum <= flags.BEACON_MIN_BORDER) return `patch found (${Math.round(best.box.w)} px) but its white border reads ${Math.round(best.borderLum)}/255 — too dim: badge brightness up, room lights down`;
+      return `patch found (${Math.round(best.box.w)} px, border ${Math.round(best.borderLum)}) but cell contrast is low — hold still, square to the camera`;
+    }
+    return "patch read cleanly — decoding (an id must repeat twice within 1.5 s; hold still ~1 s)";
+  };
+  const hint = beaconHint();
+
   return (
     <aside className="panel">
       <div className="stats">
@@ -55,6 +77,18 @@ export function OperatorPanel({ fps, source, tracks, events }: {
         <div className="stat"><b>{blurred}</b><span>blurred</span></div>
       </div>
       <div className="row"><span>source</span><b>{source}</b></div>
+
+      <h3>Beacons <span className="muted">· {decoder === "stub" ? "stub (fake A1/C3)" : `optical · ${debug?.width ?? flags.PROCESS_WIDTH}px`}</span></h3>
+      {beacons.map((b) => {
+        const bound = tracks.find((t) => t.beaconId === b.beaconId);
+        return (
+          <div className="row" key={b.beaconId}>
+            <span><b className="c-opt_in">{b.beaconId}</b> at {Math.round(b.imagePosition.x * 100)}%,{Math.round(b.imagePosition.y * 100)}%</span>
+            <b className={bound ? "" : "muted"}>{bound ? `→ ${bound.trackId}` : "no face above it"}</b>
+          </div>
+        );
+      })}
+      {!beacons.length && <div className="muted">{hint ?? (decoder === "stub" ? "" : "none decoded")}</div>}
 
       <h3>Tracks</h3>
       <table>

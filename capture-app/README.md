@@ -91,8 +91,13 @@ Tuning knobs in `flags.ts`: `PROCESS_WIDTH` (speed), `PIXELATE_SIZE`,
 `TRACK_MAX_MISSED` (occlusion hold), `BLUR_PAD`, `CONSENT_CACHE_SYNC_MS`,
 `CONSENT_STALE_MS`.
 
-**Beacon decoder:** `BEACON_DECODER` is `"stub"` (fixed beacons, safe hero path)
-or `"optical"` (real decode of A's patch). The `BEACON_*` thresholds are tuned
+**Beacon decoder:** `BEACON_DECODER` is `"optical"` (real decode of A's patch,
+the default) or `"stub"` (fixed fake beacons, no-badge fallback). The pipeline
+runs once per *video* frame (pixel-fingerprint gated), not per display refresh:
+the decoder's miss counters are tuned at the video rate, exactly like
+`scripts/tune.ts`. **overlay: on** draws candidates/decodes on the feed and the
+**Beacons** panel explains a non-decode (too small, too dim, low contrast, no
+repeat yet). `?clip=/demo/<file>.mp4` runs the pipeline on a recording. The `BEACON_*` thresholds are tuned
 against Maaz's badge recording — verified decoding id `4E` cleanly, no false ids.
 Re-tune for new footage with `tsx scripts/tune.ts <raw-rgba> <w> <h>` (extract
 frames with `ffmpeg -i clip.mov -vf scale=480:-2 -f rawvideo -pix_fmt rgba out.raw`).

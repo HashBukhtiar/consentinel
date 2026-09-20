@@ -82,14 +82,29 @@ Then, in order:
    beacon on your webcam.
 2. **Capture app** — http://localhost:5173 → **Use camera** (decoder is
    *optical* by default; the header button flips to *stub* = fake beacons).
-   Hold the badge chest-high facing the camera: the track row shows `4E`,
+   Hold the badge **just below your chin, screen square to the camera, close**:
+   the patch must be ≥ 40 px wide in the processing frame, which at the default
+   720 px is within ~50 cm of a laptop webcam (pick **1280px** in the header to
+   roughly double that). With **overlay: on** the feed shows what the decoder
+   sees — red box = patch found but too small/dim/blurred, yellow = reading,
+   green `badge 4E → T1` = decoded and bound to the face above it — and the
+   **Beacons** panel says why nothing decodes. Then the track row shows `4E`,
    consent from devnet, and the face blurs (seeded `opt_out`).
+   No badge at hand? `http://localhost:5173/?clip=/demo/badge-4E.mp4` runs the
+   whole pipeline on Maaz's badge recording (put any H.264 clip in
+   `capture-app/public/demo/`).
 3. **The on-stage beat** — flip `4E` on-chain any of these ways and watch the
    blur clear within the sync interval (~1 s push, ≤3 s poll):
    - badge A button (needs the radio bridge), or `CNSR4E1` ⏎ in `npm run bridge -- --stdin`
    - operator panel → **grant** (badge-signed + relayed by default)
    - `cd registry && npm run badge-press -- 4E grant` (the button, from another process)
    - `cd registry && npm run toggle -- 4E grant` (owner-signed)
+
+   The badge's own **A button only changes the badge's local mirror** and sends
+   a `CNSR` radio request; without the bridge that request never reaches the
+   chain, so the blur does not change. **`delete record…`** on a card really
+   deletes the on-chain record (it asks first): the badge is then unregistered
+   ⇒ always blurred and grant/revoke vanish until `npm run seed` re-registers it.
 4. **Film event** — with `4E` opted out and on camera: the panel lists the
    event, the laptop speaks (ElevenLabs, or macOS `say` labeled as fallback),
    the **Badge radio** section shows `↓ CNSF4E`, and within 10 s the event is

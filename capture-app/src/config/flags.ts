@@ -32,6 +32,8 @@ export const flags = {
   // exercises). VITE_BEACON_DECODER=stub gives two fixed fake beacons — a
   // no-badge fallback only, never for judges. The header button flips it live.
   BEACON_DECODER: (env.VITE_BEACON_DECODER ?? "optical") as "stub" | "optical",
+  // draw what the decoder sees on the feed (candidate patches, luma, bits, decoded ids)
+  BEACON_DEBUG: (env.VITE_BEACON_DEBUG ?? "1") !== "0",
   BEACON_BRIGHT_T: 175, // 0..255 threshold for the localization mask
   BEACON_MIN_BORDER: 110, // min border luma for a confident sample (real screen ≈ 190-210)
   BEACON_ASPECT_MIN: 1.5, // patch aspect ≈ 304/132 = 2.3
@@ -45,7 +47,10 @@ export const flags = {
   BEACON_CONFIRM_MS: 1500, // an id must decode twice within this window to be trusted
 
   // vision/perf (mine)
-  PROCESS_WIDTH: 720, // detection + decode input width; higher = badges decode from farther (costs CPU)
+  // detection + decode input width; higher = badges decode from farther (costs CPU).
+  // The badge patch must be ≥ BEACON_MIN_W px wide here: at 720 that is roughly
+  // ≤ 1 m from a laptop webcam, at 1280 about ≤ 1.8 m. Live-switchable in the UI.
+  PROCESS_WIDTH: Number(env.VITE_PROCESS_WIDTH ?? 720),
   DISPLAY_MAX_WIDTH: 960, // composited output width cap
   IOU_MATCH: 0.3, // tracker match threshold
   TRACK_MAX_MISSED: 10, // frames to hold a blur through occlusion (~0.6s @15fps)

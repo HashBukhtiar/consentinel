@@ -142,6 +142,18 @@ class FrameAssembler {
   }
 }
 
+// ---- diagnostics: what the localizer/sampler saw this frame ------------------
+// Read by the pipeline to draw the debug overlay and by the operator panel to
+// say *why* nothing decodes (no bright quad / low contrast / no repeat yet).
+export interface BeaconDebug {
+  width: number;
+  height: number;
+  candidates: { box: Box; borderLum: number; confident: boolean; bits: boolean[] }[];
+  tracks: { cx: number; cy: number; lastId: number | null; sinceDecodeMs: number; missed: number }[];
+  bright: number; // fraction of pixels above BEACON_BRIGHT_T (0..1) — ~0 ⇒ too dark / too far
+}
+export let lastDebug: BeaconDebug = { width: 0, height: 0, candidates: [], tracks: [], bright: 0 };
+
 // ---- decoder: track patches across frames, run an assembler per patch -------
 // A patch's assembler MUST survive the frequent non-confident frames (motion
 // blur, occlusion) or it never accumulates enough decodes to confirm an id — so
@@ -153,8 +165,10 @@ class BeaconDecoder {
 
   decode(f: Frame, tMs: number): BeaconReading[] {
     const unmatched = new Set(this.tracks);
+    const dbg: BeaconDebug = { width: f.width, height: f.height, candidates: [], tracks: [], bright: brightFraction(f) };
     for (const bb of locatePatches(f)) {
       const s = sampleCells(f, bb);
+      dbg.candidates.push({ box: bb, borderLum: s.borderLum, confident: s.confident, bits: s.bits });
       if (!s.confident) continue;
       const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
       let tr = nearest(unmatched, cx, cy, flags.BEACON_MATCH_PX);
@@ -167,12 +181,25 @@ class BeaconDecoder {
 
     const out: BeaconReading[] = [];
     for (const tr of this.tracks) {
+      dbg.tracks.push({ cx: tr.cx, cy: tr.cy, lastId: tr.asm.lastId, sinceDecodeMs: tr.asm.lastId === null ? Infinity : tMs - tr.asm.lastDecodeMs, missed: tr.missed });
       if (tr.asm.lastId !== null && tMs - tr.asm.lastDecodeMs < flags.BEACON_ID_HOLD_MS) {
         out.push({ beaconId: hex2(tr.asm.lastId), imagePosition: { x: tr.cx / f.width, y: tr.cy / f.height }, confidence: 1 });
       }
     }
+    lastDebug = dbg;
     return out;
   }
+}
+
+// cheap: sample every 8th pixel
+function brightFraction(f: Frame): number {
+  let n = 0, hit = 0;
+  for (let i = 0; i < f.width * f.height; i += 8) {
+    const o = i * 4;
+    if (0.299 * f.data[o] + 0.587 * f.data[o + 1] + 0.114 * f.data[o + 2] > flags.BEACON_BRIGHT_T) hit++;
+    n++;
+  }
+  return n ? hit / n : 0;
 }
 
 function nearest(set: Iterable<PatchTrack>, cx: number, cy: number, maxPx: number): PatchTrack | null {

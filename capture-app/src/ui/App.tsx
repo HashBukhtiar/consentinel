@@ -5,7 +5,10 @@ import { startSynthetic, SyntheticHandle } from "../sources/synthetic";
 import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
 import { chain, startConsent } from "../consent/store";
-import type { FilmEvent, Track } from "../shared/schema";
+import type { BeaconDebug } from "../decode/beacon";
+import type { BeaconReading, FilmEvent, Track } from "../shared/schema";
+
+const PROC_WIDTHS = [480, 720, 960, 1280];
 
 export function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -18,15 +21,27 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [fps, setFps] = useState(0);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [beacons, setBeacons] = useState<BeaconReading[]>([]);
+  const [debug, setDebug] = useState<BeaconDebug | null>(null);
   const [events, setEvents] = useState<FilmEvent[]>([]);
   const [source, setSource] = useState("—");
   const [decoder, setDecoder] = useState<"stub" | "optical">(flags.BEACON_DECODER);
+  const [overlay, setOverlay] = useState(flags.BEACON_DEBUG);
+  const [procWidth, setProcWidth] = useState(flags.PROCESS_WIDTH);
   const [error, setError] = useState("");
 
   function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }
+  function toggleOverlay() { flags.BEACON_DEBUG = !flags.BEACON_DEBUG; setOverlay(flags.BEACON_DEBUG); }
+  function setWidth(w: number) { flags.PROCESS_WIDTH = w; setProcWidth(w); } // the loop reads it every frame
 
   useEffect(() => { listCameras().then(setCameras).catch(() => {}); }, [running]);
   useEffect(() => { startConsent(); }, []); // chain cache runs from page load, independent of the camera
+  // ?clip=<url> runs the whole pipeline on a recording (e.g. /demo/badge-4E.mp4) — the no-camera self-test
+  useEffect(() => {
+    const clip = new URLSearchParams(location.search).get("clip");
+    if (clip) void begin(null, clip, `Clip · ${clip.split("/").pop()}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function startPipeline(stream: MediaStream | null, fileUrl: string | null, label: string) {
     setError("");
@@ -34,7 +49,7 @@ export function App() {
     if (stream) { v.srcObject = stream; v.removeAttribute("src"); }
     else if (fileUrl) { v.srcObject = null; v.src = fileUrl; v.loop = true; }
     await v.play().catch(() => {});
-    const p = new Pipeline(v, canvasRef.current!, (s: PipelineState) => { setFps(s.fps); setTracks(s.tracks); },
+    const p = new Pipeline(v, canvasRef.current!, (s: PipelineState) => { setFps(s.fps); setTracks(s.tracks); setBeacons(s.beacons); setDebug(s.debug); },
       (e) => setEvents((prev) => [e, ...prev].slice(0, 6)));
     pipeRef.current = p;
     try { await p.start(); setRunning(true); setSource(label); }
@@ -69,7 +84,7 @@ export function App() {
       (el.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop());
       el.srcObject = null; el.removeAttribute("src");
     }
-    setRunning(false); setTracks([]); setFps(0);
+    setRunning(false); setTracks([]); setBeacons([]); setDebug(null); setFps(0);
   }
 
   const fail = (e: any) => setError(e?.message ?? String(e));
@@ -93,6 +108,12 @@ export function App() {
         <button onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")} title="stub = fixed fake beacons · optical = decode the real badge">
           beacon: {decoder}
         </button>
+        <button onClick={toggleOverlay} title="draw what the decoder sees: candidate patches (red = not confident, yellow = reading), decoded ids (green), face boxes">
+          overlay: {overlay ? "on" : "off"}
+        </button>
+        <select value={procWidth} onChange={(e) => setWidth(Number(e.target.value))} title="decode/detect resolution — higher = badge readable from farther, costs CPU">
+          {PROC_WIDTHS.map((w) => <option key={w} value={w}>{w}px</option>)}
+        </select>
         <label className="file">Load clip
           <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) begin(null, URL.createObjectURL(f), "Clip · fallback"); }} />
         </label>
@@ -103,7 +124,7 @@ export function App() {
 
       <div className="stage">
         <canvas ref={canvasRef} className="feed" />
-        <OperatorPanel fps={fps} source={source} tracks={tracks} events={events} />
+        <OperatorPanel fps={fps} source={source} tracks={tracks} events={events} beacons={beacons} debug={debug} decoder={decoder} />
       </div>
 
       <video ref={videoRef} muted playsInline style={{ display: "none" }} />
