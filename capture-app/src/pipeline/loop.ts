@@ -153,7 +153,7 @@ export class Pipeline {
       remote.submit(canvas, tMs);
     }
     const res = remote ? remote.take() : null;
-    if (remote) this.stageMs.sidecar = remote.rttMs; else delete this.stageMs.sidecar;
+    if (remote) { this.stageMs.sidecar = remote.rttMs; delete this.stageMs.detect; } else delete this.stageMs.sidecar; // the HUD shows only what runs
     let beacons: BeaconReading[] = [];
     const runStages = (): Track[] => {
       let faces: RawFace[] | null = null;
