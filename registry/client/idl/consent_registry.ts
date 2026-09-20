@@ -226,6 +226,150 @@ export type ConsentRegistry = {
       ]
     },
     {
+      "name": "recordCapture",
+      "docs": [
+        "The camera files a notice: an opted-out badge was on camera. One",
+        "`CaptureNotice` per film-event, keyed by the event's sha256 — the same",
+        "hash the off-chain audit log stores for that entry and the rolling",
+        "commitment covers, so the notice and the log entry name each other.",
+        "`filmed_at` is the camera's clock at capture; `recorded_at` is the",
+        "chain's. Only the camera's authority (a registered `CameraLog`) can",
+        "write one, and it pays the rent: the record is the person's evidence,",
+        "so nobody but the camera can create it and nobody can delete it."
+      ],
+      "discriminator": [
+        65,
+        63,
+        80,
+        32,
+        82,
+        165,
+        43,
+        175
+      ],
+      "accounts": [
+        {
+          "name": "camera",
+          "docs": [
+            "The camera must be registered; its authority signs and pays."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  109,
+                  101,
+                  114,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "notice",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  112,
+                  116,
+                  117,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              },
+              {
+                "kind": "arg",
+                "path": "eventHash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "camera"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "badgeId",
+          "type": "u16"
+        },
+        {
+          "name": "eventHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "filmedAt",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "recordNotice",
+      "docs": [
+        "The person behind the badge was told (`channels` = which ways, see",
+        "`CHANNEL_*`). Stamps the notice with the chain clock. Single-use: a",
+        "notice is either pending or delivered, and \"delivered\" cannot be",
+        "re-dated."
+      ],
+      "discriminator": [
+        216,
+        150,
+        252,
+        117,
+        184,
+        208,
+        227,
+        128
+      ],
+      "accounts": [
+        {
+          "name": "notice",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "channels",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "register",
       "docs": [
         "Issuer creates the consent record for `badge_id` and binds it to the",
@@ -650,6 +794,19 @@ export type ConsentRegistry = {
       ]
     },
     {
+      "name": "captureNotice",
+      "discriminator": [
+        215,
+        224,
+        228,
+        92,
+        162,
+        170,
+        229,
+        132
+      ]
+    },
+    {
       "name": "consentAccount",
       "discriminator": [
         129,
@@ -704,6 +861,19 @@ export type ConsentRegistry = {
       ]
     },
     {
+      "name": "captureRecorded",
+      "discriminator": [
+        18,
+        60,
+        143,
+        186,
+        110,
+        23,
+        130,
+        20
+      ]
+    },
+    {
       "name": "consentChanged",
       "discriminator": [
         61,
@@ -740,6 +910,19 @@ export type ConsentRegistry = {
         191,
         53,
         246
+      ]
+    },
+    {
+      "name": "noticeRecorded",
+      "discriminator": [
+        122,
+        55,
+        30,
+        127,
+        130,
+        115,
+        85,
+        96
       ]
     }
   ],
@@ -803,6 +986,21 @@ export type ConsentRegistry = {
       "code": 6011,
       "name": "badSysvar",
       "msg": "Expected the Instructions sysvar"
+    },
+    {
+      "code": 6012,
+      "name": "badTimestamp",
+      "msg": "filmed_at must be a past unix time (at most 5 minutes ahead of the chain clock)"
+    },
+    {
+      "code": 6013,
+      "name": "noChannel",
+      "msg": "channels must name at least one notification channel"
+    },
+    {
+      "code": 6014,
+      "name": "alreadyNotified",
+      "msg": "This capture notice has already been marked as delivered"
     }
   ],
   "types": [
@@ -886,6 +1084,109 @@ export type ConsentRegistry = {
           },
           {
             "name": "at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "captureNotice",
+      "docs": [
+        "One per film-event of an opted-out badge. PDA seeds:",
+        "`[\"capture\", camera authority, event_hash]`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "badgeId",
+            "docs": [
+              "The badge that was on camera."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "camera",
+            "docs": [
+              "The camera authority that filed it (a registered `CameraLog`)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "eventHash",
+            "docs": [
+              "sha256 of the canonical FilmEvent — the off-chain audit entry this is about."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "filmedAt",
+            "docs": [
+              "The camera's clock at capture (unix seconds)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "recordedAt",
+            "docs": [
+              "Chain clock when the capture was filed here."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "notifiedAt",
+            "docs": [
+              "Chain clock when the person was told; 0 while pending."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "channels",
+            "docs": [
+              "How they were told (`CHANNEL_*` bits); 0 while pending."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "captureRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "badgeId",
+            "type": "u16"
+          },
+          {
+            "name": "camera",
+            "type": "pubkey"
+          },
+          {
+            "name": "eventHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "filmedAt",
+            "type": "i64"
+          },
+          {
+            "name": "recordedAt",
             "type": "i64"
           }
         ]
@@ -1072,6 +1373,39 @@ export type ConsentRegistry = {
           {
             "name": "at",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "noticeRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "badgeId",
+            "type": "u16"
+          },
+          {
+            "name": "camera",
+            "type": "pubkey"
+          },
+          {
+            "name": "eventHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "notifiedAt",
+            "type": "i64"
+          },
+          {
+            "name": "channels",
+            "type": "u8"
           }
         ]
       }

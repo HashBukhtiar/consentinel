@@ -30,13 +30,16 @@ import {
   badgeIdToU16,
   bytesEqual,
   cameraPda,
+  capturePda,
   consentMessage,
   consentPda,
   defaultExpiresAt,
   normalizeBadgeId,
   overridePda,
   registryPda,
+  toBase58,
   toHex,
+  u16le,
   u16ToBadgeId,
 } from "./core";
 
@@ -81,11 +84,25 @@ export interface CameraView {
   address: string;
 }
 
+/** A camera's notice that an opted-out badge was on camera, and whether/when the person was told. */
+export interface CaptureView {
+  badgeId: string;
+  badgeIdNum: number;
+  camera: string; // camera authority, base58
+  eventHash: string; // hex sha256 of the canonical FilmEvent (= the audit log entry's hash)
+  filmedAt: number; // camera clock, unix seconds
+  recordedAt: number; // chain clock when filed
+  notifiedAt: number; // chain clock when the person was told; 0 while pending
+  channels: number; // CHANNEL_* bits; 0 while pending
+  address: string; // PDA base58
+}
+
 export interface RegistrySnapshot {
   registry: RegistryView | null;
   consents: ConsentView[];
   overrides: OverrideView[];
   cameras: CameraView[];
+  captures: CaptureView[];
   slot: number;
 }
 
@@ -93,7 +110,9 @@ export type RegistryEvent =
   | { name: "ConsentChanged"; badgeId: string; owner: string; consent: boolean; revision: number; instance: number; at: number; delegated: boolean }
   | { name: "ConsentClosed"; badgeId: string; owner: string; at: number }
   | { name: "EventOverrideChanged"; badgeId: string; owner: string; eventId: string; consent: boolean | null; at: number }
-  | { name: "CaptureAttested"; camera: string; count: number; commitment: string; head: string; at: number };
+  | { name: "CaptureAttested"; camera: string; count: number; commitment: string; head: string; at: number }
+  | { name: "CaptureRecorded"; badgeId: string; camera: string; eventHash: string; filmedAt: number; recordedAt: number }
+  | { name: "NoticeRecorded"; badgeId: string; camera: string; eventHash: string; notifiedAt: number; channels: number };
 
 export interface LogNotification {
   signature: string;
@@ -152,7 +171,7 @@ export class ConsentRegistryClient {
   readonly commitment: Commitment;
   private readonly coder: BorshCoder;
   private readonly eventParser: EventParser;
-  private readonly disc: { registry: Uint8Array; consent: Uint8Array; override: Uint8Array; camera: Uint8Array };
+  private readonly disc: { registry: Uint8Array; consent: Uint8Array; override: Uint8Array; camera: Uint8Array; capture: Uint8Array };
 
   constructor(readonly connection: Connection, opts: ClientOptions = {}) {
     this.programId = opts.programId ?? CONSENT_REGISTRY_PROGRAM_ID;
@@ -168,7 +187,7 @@ export class ConsentRegistryClient {
       if (!a) throw new Error(`IDL missing account ${n}`);
       return Uint8Array.from(a.discriminator);
     };
-    this.disc = { registry: find("Registry"), consent: find("ConsentAccount"), override: find("EventOverride"), camera: find("CameraLog") };
+    this.disc = { registry: find("Registry"), consent: find("ConsentAccount"), override: find("EventOverride"), camera: find("CameraLog"), capture: find("CaptureNotice") };
   }
 
   // ---- reads ---------------------------------------------------------------
@@ -203,15 +222,37 @@ export class ConsentRegistryClient {
     return this.decodeCamera(pda, info.data);
   }
 
+  /** The notice for one film-event (by the audit hash of the event), if the camera filed it. */
+  async fetchCapture(authority: PublicKey, eventHash: Uint8Array): Promise<CaptureView | null> {
+    const [pda] = capturePda(authority, eventHash, this.programId);
+    const info = await this.connection.getAccountInfo(pda, this.commitment);
+    return info ? this.decodeCapture(pda, info.data) : null;
+  }
+
+  /**
+   * Every capture notice, newest first — optionally only one badge's, or one
+   * camera's (memcmp filters on the fixed-offset fields: discriminator at 0,
+   * badge_id u16 LE at 8, camera authority at 10). This is the "who filmed
+   * me, and was I told?" read: one RPC, straight from the chain.
+   */
+  async fetchCaptures(filter: { badgeId?: string; camera?: PublicKey } = {}): Promise<CaptureView[]> {
+    const filters: { memcmp: { offset: number; bytes: string } }[] = [{ memcmp: { offset: 0, bytes: toBase58(this.disc.capture) } }];
+    if (filter.badgeId !== undefined) filters.push({ memcmp: { offset: 8, bytes: toBase58(u16le(badgeIdToU16(filter.badgeId))) } });
+    if (filter.camera) filters.push({ memcmp: { offset: 10, bytes: filter.camera.toBase58() } });
+    const res = await this.connection.getProgramAccounts(this.programId, { commitment: this.commitment, filters });
+    return res.map(({ pubkey, account }) => this.decodeCapture(pubkey, account.data)).sort((a, b) => b.recordedAt - a.recordedAt);
+  }
+
   /** One RPC call: every account this program owns, decoded by discriminator, with the slot it was read at. */
   async fetchAll(): Promise<RegistrySnapshot> {
     const res = await this.connection.getProgramAccounts(this.programId, { commitment: this.commitment, withContext: true });
-    const snap: RegistrySnapshot = { registry: null, consents: [], overrides: [], cameras: [], slot: res.context.slot };
+    const snap: RegistrySnapshot = { registry: null, consents: [], overrides: [], cameras: [], captures: [], slot: res.context.slot };
     for (const { pubkey, account } of res.value) {
       const d = account.data.subarray(0, 8);
       if (bytesEqual(d, this.disc.consent)) snap.consents.push(this.decodeConsent(pubkey, account.data));
       else if (bytesEqual(d, this.disc.override)) snap.overrides.push(this.decodeOverride(pubkey, account.data));
       else if (bytesEqual(d, this.disc.camera)) snap.cameras.push(this.decodeCamera(pubkey, account.data));
+      else if (bytesEqual(d, this.disc.capture)) snap.captures.push(this.decodeCapture(pubkey, account.data));
       else if (bytesEqual(d, this.disc.registry)) snap.registry = this.decodeRegistry(pubkey, account.data);
     }
     return snap;
@@ -225,7 +266,7 @@ export class ConsentRegistryClient {
    * every ~30 s and refreshes with this every few seconds stays under it.
    */
   async fetchAccounts(addresses: PublicKey[]): Promise<{ snap: RegistrySnapshot; closed: PublicKey[] }> {
-    const snap: RegistrySnapshot = { registry: null, consents: [], overrides: [], cameras: [], slot: 0 };
+    const snap: RegistrySnapshot = { registry: null, consents: [], overrides: [], cameras: [], captures: [], slot: 0 };
     const closed: PublicKey[] = [];
     for (let i = 0; i < addresses.length; i += 100) {
       const chunk = addresses.slice(i, i + 100);
@@ -238,6 +279,7 @@ export class ConsentRegistryClient {
         if (bytesEqual(d, this.disc.consent)) snap.consents.push(this.decodeConsent(pubkey, account.data));
         else if (bytesEqual(d, this.disc.override)) snap.overrides.push(this.decodeOverride(pubkey, account.data));
         else if (bytesEqual(d, this.disc.camera)) snap.cameras.push(this.decodeCamera(pubkey, account.data));
+        else if (bytesEqual(d, this.disc.capture)) snap.captures.push(this.decodeCapture(pubkey, account.data));
         else if (bytesEqual(d, this.disc.registry)) snap.registry = this.decodeRegistry(pubkey, account.data);
       });
     }
@@ -290,6 +332,22 @@ export class ConsentRegistryClient {
     };
   }
 
+  decodeCapture(address: PublicKey, data: Buffer): CaptureView {
+    const c = this.coder.accounts.decode("CaptureNotice", data);
+    const badgeId = num(f(c, "badge_id", "badgeId"));
+    return {
+      badgeId: u16ToBadgeId(badgeId),
+      badgeIdNum: badgeId,
+      camera: (c.camera as PublicKey).toBase58(),
+      eventHash: toHex(f(c, "event_hash", "eventHash") as number[]),
+      filmedAt: num(f(c, "filmed_at", "filmedAt")),
+      recordedAt: num(f(c, "recorded_at", "recordedAt")),
+      notifiedAt: num(f(c, "notified_at", "notifiedAt")),
+      channels: num(c.channels),
+      address: address.toBase58(),
+    };
+  }
+
   /** Decode this program's Anchor events out of a transaction's log lines. */
   parseEvents(logs: string[]): RegistryEvent[] {
     const out: RegistryEvent[] = [];
@@ -330,6 +388,26 @@ export class ConsentRegistryClient {
             commitment: toHex(d.commitment),
             head: toHex(d.head),
             at: num(d.at),
+          });
+          break;
+        case "capturerecorded":
+          out.push({
+            name: "CaptureRecorded",
+            badgeId: badgeId(),
+            camera: d.camera.toBase58(),
+            eventHash: toHex(f(d, "event_hash", "eventHash")),
+            filmedAt: num(f(d, "filmed_at", "filmedAt")),
+            recordedAt: num(f(d, "recorded_at", "recordedAt")),
+          });
+          break;
+        case "noticerecorded":
+          out.push({
+            name: "NoticeRecorded",
+            badgeId: badgeId(),
+            camera: d.camera.toBase58(),
+            eventHash: toHex(f(d, "event_hash", "eventHash")),
+            notifiedAt: num(f(d, "notified_at", "notifiedAt")),
+            channels: num(d.channels),
           });
           break;
       }
@@ -447,6 +525,30 @@ export class ConsentRegistryClient {
       .attestCapture(Array.from(commitment))
       .accountsPartial({ camera: pda, authority: authority.publicKey })
       .instruction();
+    return this.send([ix], feePayer, extra(feePayer, authority));
+  }
+
+  /**
+   * The camera files a notice that `badgeId` (opted out) was on camera:
+   * `eventHash` = `filmEventHash(event)` (32 bytes), `filmedAt` = the camera's
+   * clock in unix seconds. One notice per event; the authority pays the rent.
+   */
+  async recordCapture(authority: TxSigner, badgeId: string, eventHash: Uint8Array, filmedAt: number, feePayer: TxSigner = authority): Promise<string> {
+    if (eventHash.length !== 32) throw new Error("event hash must be 32 bytes");
+    const [cpda] = cameraPda(authority.publicKey, this.programId);
+    const [npda] = capturePda(authority.publicKey, eventHash, this.programId);
+    const ix = await this.program.methods
+      .recordCapture(badgeIdToU16(badgeId), Array.from(eventHash), new BN(Math.floor(filmedAt)))
+      .accountsPartial({ camera: cpda, notice: npda, authority: authority.publicKey })
+      .instruction();
+    return this.send([ix], feePayer, extra(feePayer, authority));
+  }
+
+  /** …and that the person was told, over `channels` (CHANNEL_* bits). Single-use per notice. */
+  async recordNotice(authority: TxSigner, eventHash: Uint8Array, channels: number, feePayer: TxSigner = authority): Promise<string> {
+    if (eventHash.length !== 32) throw new Error("event hash must be 32 bytes");
+    const [npda] = capturePda(authority.publicKey, eventHash, this.programId);
+    const ix = await this.program.methods.recordNotice(channels).accountsPartial({ notice: npda, authority: authority.publicKey }).instruction();
     return this.send([ix], feePayer, extra(feePayer, authority));
   }
 

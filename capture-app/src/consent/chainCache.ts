@@ -12,12 +12,13 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import {
   ConsentRegistryClient,
+  type CaptureView,
   type ConsentView,
   type LogNotification,
   type OverrideView,
   type RegistrySnapshot,
 } from "../../../registry/client/src/registry";
-import { explorerUrl, normalizeBadgeId, type Cluster } from "../../../registry/client/src/core";
+import { capturePda, channelNames, explorerUrl, fromHex, normalizeBadgeId, type Cluster } from "../../../registry/client/src/core";
 import { flags } from "../config/flags";
 import type { GetConsent } from "../shared/schema";
 
@@ -66,6 +67,7 @@ export class ChainConsentCache {
 
   private consents = new Map<string, Stamped<ConsentView>>();
   private overrides = new Map<string, Stamped<OverrideView>>();
+  private notices = new Map<string, Stamped<CaptureView>>(); // by address; the camera's filmed/notified records
   private tombstones = new Map<string, number>(); // key → slot at which it was closed
   private normCache = new Map<string, string | null>();
   private inFlight = new Set<string>();
@@ -162,6 +164,11 @@ export class ChainConsentCache {
 
   records(): ConsentView[] {
     return [...this.consents.values()].map((s) => s.view).sort((a, b) => a.badgeId.localeCompare(b.badgeId));
+  }
+
+  /** The cameras' on-chain capture notices (filmed / notified), newest first. */
+  captures(badgeId?: string): CaptureView[] {
+    return [...this.notices.values()].map((s) => s.view).filter((c) => !badgeId || c.badgeId === badgeId).sort((a, b) => b.recordedAt - a.recordedAt || b.filmedAt - a.filmedAt);
   }
 
   overridesFor(badgeId: string): OverrideView[] {
@@ -271,12 +278,23 @@ export class ChainConsentCache {
       if (cur && cur.slot > snap.slot) continue;
       this.overrides.set(key, { view: o, slot: snap.slot });
     }
+    for (const c of snap.captures) this.mergeCapture(c, snap.slot);
     for (const pk of closed) {
       const addr = pk.toBase58();
       this.known.delete(addr);
       for (const [id, s] of this.consents) if (s.view.address === addr && s.slot <= snap.slot) { this.consents.delete(id); this.tombstones.set(id, snap.slot); this.note("poll", `${id} record closed ⇒ blur (fail-safe)`, id); }
       for (const [key, s] of this.overrides) if (s.view.address === addr && s.slot <= snap.slot) { this.overrides.delete(key); this.tombstones.set(key, snap.slot); }
+      if (this.notices.get(addr)?.slot! <= snap.slot) this.notices.delete(addr);
     }
+  }
+
+  /** Slot-ordered merge of one capture notice (poll or push). Notices are never closed, only completed. */
+  private mergeCapture(c: CaptureView, slot: number): void {
+    this.remember(c.address);
+    const cur = this.notices.get(c.address);
+    if (cur && cur.slot > slot) return;
+    if (cur && !cur.view.notifiedAt && c.notifiedAt) this.note("poll", `${c.badgeId} notified (${channelNames(c.channels).join(", ")}) — on-chain`, c.badgeId);
+    this.notices.set(c.address, { view: c, slot });
   }
 
   /** Apply a full poll snapshot. Records/tombstones newer than the snapshot's slot win. */
@@ -284,6 +302,7 @@ export class ChainConsentCache {
     this.known.clear();
     for (const c of snap.consents) this.remember(c.address);
     for (const o of snap.overrides) this.remember(o.address);
+    for (const c of snap.captures) this.remember(c.address);
     const seen = new Set<string>();
     for (const c of snap.consents) {
       seen.add(c.badgeId);
@@ -308,6 +327,9 @@ export class ChainConsentCache {
       this.overrides.set(key, { view: o, slot: snap.slot });
     }
     for (const [key, s] of this.overrides) if (!seenO.has(key) && s.slot <= snap.slot) this.overrides.delete(key);
+    const seenC = new Set<string>();
+    for (const c of snap.captures) { seenC.add(c.address); this.mergeCapture(c, snap.slot); }
+    for (const [addr, s] of this.notices) if (!seenC.has(addr) && s.slot <= snap.slot) this.notices.delete(addr);
     // tombstones older than this snapshot have done their job
     for (const [key, slot] of this.tombstones) if (slot < snap.slot) this.tombstones.delete(key);
   }
@@ -366,6 +388,32 @@ export class ChainConsentCache {
         case "CaptureAttested":
           this.note("push", `camera commitment #${e.count} anchored (head ${e.head.slice(0, 8)}…)`, undefined, n.signature);
           break;
+        case "CaptureRecorded": {
+          let address = "";
+          try { address = capturePda(new PublicKey(e.camera), fromHex(e.eventHash), this.client.programId)[0].toBase58(); } catch { break; }
+          const cur = this.notices.get(address);
+          if (cur && cur.slot > n.slot) break;
+          this.notices.set(address, {
+            view: { badgeId: e.badgeId, badgeIdNum: parseInt(e.badgeId, 16), camera: e.camera, eventHash: e.eventHash, filmedAt: e.filmedAt, recordedAt: e.recordedAt, notifiedAt: cur?.view.notifiedAt ?? 0, channels: cur?.view.channels ?? 0, address },
+            slot: n.slot,
+          });
+          this.remember(address);
+          this.note("push", `${e.badgeId} filmed at ${new Date(e.filmedAt * 1000).toLocaleTimeString()} — notice filed on-chain`, e.badgeId, n.signature);
+          break;
+        }
+        case "NoticeRecorded": {
+          let address = "";
+          try { address = capturePda(new PublicKey(e.camera), fromHex(e.eventHash), this.client.programId)[0].toBase58(); } catch { break; }
+          const cur = this.notices.get(address);
+          if (cur && cur.slot > n.slot) break;
+          this.notices.set(address, {
+            view: { badgeId: e.badgeId, badgeIdNum: parseInt(e.badgeId, 16), camera: e.camera, eventHash: e.eventHash, filmedAt: cur?.view.filmedAt ?? 0, recordedAt: cur?.view.recordedAt ?? 0, notifiedAt: e.notifiedAt, channels: e.channels, address },
+            slot: n.slot,
+          });
+          this.remember(address);
+          this.note("push", `${e.badgeId} notified (${channelNames(e.channels).join(", ")}) at ${new Date(e.notifiedAt * 1000).toLocaleTimeString()} — on-chain`, e.badgeId, n.signature);
+          break;
+        }
       }
     }
     this.emit();

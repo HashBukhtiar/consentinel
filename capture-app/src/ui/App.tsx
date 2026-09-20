@@ -3,6 +3,7 @@ import { Pipeline, PipelineState } from "../pipeline/loop";
 import { listCameras, startCamera, startScreen, startGlasses } from "../sources/videoSource";
 import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
+import { NoticeToasts } from "./NoticeToast";
 import { chain, startConsent } from "../consent/store";
 import type { FilmEvent, Track } from "../shared/schema";
 
@@ -76,6 +77,7 @@ export function App() {
         <section className="feedcol">
           <div className="feedwrap">
             <canvas ref={canvasRef} className="feed" />
+            <NoticeToasts />
             {running ? (
               <div className="hud" aria-live="polite">
                 <span><b>{tracks.length}</b> in frame</span>

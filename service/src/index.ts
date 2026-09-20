@@ -2,6 +2,7 @@
 //
 //   POST /film-event              ← capture app (fire-and-forget FilmEvent; Bearer SERVICE_TOKEN if set)
 //                                   → audit log → badge buzz → spoken alert → next on-chain commitment
+//                                   → notice: record_capture (filmed) + email (dry-run) + record_notice (told), on-chain
 //   GET  /health                  flags + subsystem state
 //   GET  /badge/:id/pending       badge poll transport (drains the queue)
 //   GET  /badge/:id/consent       badge reads its own on-chain state (+ nonce/instance/serverTime to sign)
@@ -11,6 +12,7 @@
 //   POST /consent/delegated       badge-signed consent update, relayed on-chain (signature-verified; open)
 //   GET  /audit/events?badge=A1B2 the off-chain log (Bearer SERVICE_TOKEN if set) — for the audit layer
 //   GET  /audit/verify            local log recomputed vs on-chain head (hashes only; open)
+//   GET  /audit/notices?badge=86  this camera's on-chain capture notices (filmed_at / notified_at) + recent outcomes (open)
 //   WS   /badge?id=A1B2           badge push transport (JSON; for a Wi-Fi bridge/dev board)
 //   WS   /bridge                  radio bridge: CNS* text frames both ways (see BADGE_PROTOCOL.md)
 //   GET  /bridge/pending          radio bridge poll transport (drains queued CNSF/CNSC frames)
@@ -29,6 +31,7 @@ import { Chain, HttpError } from "./chain";
 import { RadioBridge } from "./radio";
 import { ThruLedger } from "./thru";
 import { Enroller } from "./enroll";
+import { Notifier } from "./notify";
 import { explorerUrl } from "../../registry/client/src/core";
 
 const log = (m: string) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
@@ -74,6 +77,7 @@ await chain.init();
 const radio = new RadioBridge(chain, broadcast, log);
 radio.start(config.RADIO_SYNC_MS);
 const enroller = new Enroller(chain, broadcast, log);
+const notifier = new Notifier(chain, broadcast, log);
 let logsSubscribed = false;
 try {
   chain.reg.onLogs((n) => {
@@ -97,10 +101,13 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
   if (audit.has(ev.eventId)) return { ok: true, duplicate: true };
   received++;
   const entry = audit.append(ev);
-  const say = alertText(entry.beaconId, entry.cameraId);
+  const person = notifier.contact(entry.beaconId);
+  const say = alertText(entry.beaconId, entry.cameraId, person?.name);
   const delivery = badges.send(entry.beaconId, { type: "filmed", beaconId: entry.beaconId, at: entry.at, cameraId: entry.cameraId, buzzMs: 600, say });
   const radioEv = radio.filmEvent(entry.beaconId); // CNSF<id> → the badge's red alarm
   chain.enqueue(entry);
+  // filmed → told, both on-chain (two camera-signed transactions, off this request's path)
+  const notice = notifier.handle(entry, { radioDelivered: (radioEv?.delivered ?? 0) > 0 || delivery.delivered > 0, voice: voice.provider !== "none" });
   // Thru: commit this one event immediately (no batching) — the evidence ledger
   void thru.commit("film-event", `ev${entry.seq}`, { eventId: entry.eventId, seq: entry.seq, hash: entry.hash, beacon: entry.beaconId, at: entry.at })
     .then((c) => c && broadcast({ type: "thru", kind: "film-event", eventId: entry.eventId, seed: c.seed, account: c.account, explorer: c.explorer, ms: c.ms }));
@@ -118,6 +125,7 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
     radio: radioEv ? { frame: radioEv.frame, delivered: radioEv.delivered, queued: radioEv.queued } : null,
     attest: chain.enabled ? "queued for next interval" : "disabled",
     thru: thru.enabled ? "committing" : "disabled",
+    notice: notice.stage === "disabled" ? "disabled" : { stage: notice.stage, coveredBy: notice.coveredBy, person: person?.name ?? null, email: config.EMAIL_MODE },
   };
 }
 
@@ -148,6 +156,7 @@ function health() {
     badges: badges.status(),
     radio: { ...radio.status(), logsSubscribed, syncMs: config.RADIO_SYNC_MS },
     autoRegister: enroller.status(),
+    notify: notifier.status(),
     operators: operators.size,
   };
 }
@@ -321,6 +330,13 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const events = badge ? audit.forBadge(badge) : audit.all();
       return json(200, { count: events.length, events: events.slice(-200) });
     }
+    if (p === "/audit/notices" && req.method === "GET") {
+      const badge = url.searchParams.get("badge") ?? undefined;
+      let onChain: unknown[] = [];
+      try { onChain = await chain.fetchNotices(badge || undefined); } catch (e) { return json(502, { error: `chain read failed: ${(e as Error).message}` }); }
+      const st = notifier.status();
+      return json(200, { camera: chain.camera?.publicKey.toBase58() ?? null, count: onChain.length, onChain, recent: badge ? st.recent.filter((n) => n.beaconId === norm(badge)) : st.recent, emailMode: st.emailMode });
+    }
     if (p === "/audit/verify" && req.method === "GET") {
       const cam = await chain.refreshCamera();
       if (!cam) return json(200, { ok: false, reason: "camera not registered on-chain", local: audit.expectedHead() });
@@ -377,6 +393,8 @@ server.listen(config.PORT, () => {
   console.log(`  auth      token ${config.SERVICE_TOKEN ? "required" : "not set (open)"}; CORS ${config.CORS_ORIGIN}`);
   console.log(`  radio     bridge ws://localhost:${config.PORT}/bridge · GET /bridge/pending · POST /bridge/uplink  (keys ${config.BADGE_KEYS_DIR}; chain push ${logsSubscribed ? "on" : "off"})`);
   console.log(`  enrol     auto-register first-seen badges as opt_out: ${enroller.enabled ? "on" : "OFF"} (issuer key ${config.ISSUER_KEYPAIR}${existsSync(config.ISSUER_KEYPAIR) ? "" : " — missing"})`);
+  const ns = notifier.status();
+  console.log(`  notify    filmed + told on-chain: ${ns.enabled ? "on" : "OFF"} · email ${ns.emailMode} · ${ns.contacts.length} contact(s) in ${config.CONTACTS_FILE}`);
   if (chain.relayer) {
     chain.conn.getBalance(chain.relayer.publicKey)
       .then((b) => { if (b < 0.01e9) console.log(`  !! relayer balance ${(b / 1e9).toFixed(3)} SOL — fund it or badge-signed updates will fail`); })

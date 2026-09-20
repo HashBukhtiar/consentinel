@@ -10,7 +10,8 @@
     "bridge": "tsx scripts/serial-bridge.mts",
     "smoke": "tsx scripts/smoke.mts",
     "test": "tsx test/audit.test.ts && tsx test/radio.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "rebuild-audit": "tsx scripts/rebuild-audit.mts"
   },
   "dependencies": {
     "@anchor-lang/core": "^1.2.0",
