@@ -10,7 +10,7 @@
 // flags.BEACON_* need ~10 min of tuning against a real badge/recording.
 import { decodeFrame, hex2, FRAME_CELL, SYMBOLS_PER_FRAME, PATCH, BORDER_PX } from "@shared/beacon";
 import type { SymbolSample } from "@shared/beacon";
-import type { BeaconReading, DecodeBeacons } from "../shared/schema";
+import type { BeaconReading } from "../shared/schema";
 import { cellRectFrac } from "./patch";
 import { flags } from "../config/flags";
 
@@ -25,7 +25,10 @@ function boxLum(f: Frame, cx: number, cy: number, hw: number, hh: number): numbe
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const o = (y * f.width + x) * 4;
-      sum += 0.299 * f.data[o] + 0.587 * f.data[o + 1] + 0.114 * f.data[o + 2];
+      // "whiteness" = min channel: white cells are achromatic (high in all
+      // channels), the blue background is chromatic (low R), so this separates
+      // them even when the blue is bright/over-exposed (luma does not).
+      sum += Math.min(f.data[o], f.data[o + 1], f.data[o + 2]);
       cnt++;
     }
   }
@@ -192,13 +195,21 @@ class FrameAssembler {
 // tracks persist for BEACON_TRACK_MISS frames, exactly like the face tracker.
 type PatchTrack = { cx: number; cy: number; asm: FrameAssembler; missed: number };
 
+// A higher-resolution crop of a normalized [0,1] frame region, supplied by the
+// loop from the source video. Lets us localize cheap (coarse frame) but sample
+// fine (native res) — many more pixels per cell when the badge is far/small.
+export type RegionSampler = (nx: number, ny: number, nw: number, nh: number) => ImageData | null;
+
 class BeaconDecoder {
   private tracks: PatchTrack[] = [];
 
-  decode(f: Frame, tMs: number): BeaconReading[] {
+  decode(f: Frame, tMs: number, sampler?: RegionSampler): BeaconReading[] {
     const unmatched = new Set(this.tracks);
     for (const bb of locatePatches(f)) {
-      const s = sampleCells(f, bb);
+      // localize on the coarse frame, sample cells from a native-res crop of
+      // just this patch region — the distance de-risk.
+      const fine = sampler?.(bb.x / f.width, bb.y / f.height, bb.w / f.width, bb.h / f.height);
+      const s = fine ? sampleCells(fine, { x: 0, y: 0, w: fine.width, h: fine.height }) : sampleCells(f, bb);
       if (!s.confident) continue;
       const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
       let tr = nearest(unmatched, cx, cy, flags.BEACON_MATCH_PX);
@@ -229,7 +240,8 @@ function nearest(set: Iterable<PatchTrack>, cx: number, cy: number, maxPx: numbe
 }
 
 const decoder = new BeaconDecoder();
-export const decodeBeacons: DecodeBeacons = (frame, tMs) => decoder.decode(frame, tMs);
+export const decodeBeacons = (frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] =>
+  decoder.decode(frame, tMs, sampler);
 
 /** A decoder with its own patch-track state — for the offline sweep, which
  *  runs hundreds of independent trials and must not leak state between them. */
@@ -239,4 +251,4 @@ export function createDecoder(): DecodeBeacons {
 }
 
 // exported for the self-check
-export const _internal = { locatePatches, sampleCells, scanComponents };
+export const _internal = { locatePatches, sampleCells, scanComponents, newDecoder: () => new BeaconDecoder() };

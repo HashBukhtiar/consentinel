@@ -8,10 +8,11 @@ export async function listCameras(): Promise<MediaDeviceInfo[]> {
 }
 
 export function startCamera(deviceId?: string): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    video: deviceId ? { deviceId: { exact: deviceId } } : { width: 1280, height: 720 },
-    audio: false,
-  });
+  // request 1080p so the fine beacon sampler has more native pixels to crop;
+  // `ideal` degrades gracefully if the camera can't do it.
+  const video: MediaTrackConstraints = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  if (deviceId) video.deviceId = { exact: deviceId };
+  return navigator.mediaDevices.getUserMedia({ video, audio: false });
 }
 
 // Screen capture — pick the WhatsApp Desktop window showing the glasses feed.

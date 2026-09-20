@@ -12,11 +12,6 @@ import { flags } from "../config/flags";
 import { obsEnabled, traceFrame, traceStage, logConsent } from "../obs/sentry";
 import type { FilmEvent, Track } from "../shared/schema";
 
-// stub (fixed beacons) vs optical (real decode) — read live so a UI/source can
-// flip flags.BEACON_DECODER at runtime (e.g. synthetic-badge mode).
-const decodeBeacons = (frame: ImageData, tMs: number) =>
-  (flags.BEACON_DECODER === "optical" ? opticalDecode : stubDecode)(frame, tMs);
-
 export interface PipelineState { fps: number; tracks: Track[] }
 
 // The hot loop. Order: draw → detect → track → decode beacons → associate →
@@ -27,6 +22,7 @@ export class Pipeline {
   private tracker = new Tracker();
   private emitter: FilmEmitter;
   private detectCanvas = document.createElement("canvas");
+  private sampleCanvas = document.createElement("canvas"); // native-res crop for fine beacon sampling
   private running = false;
   private raf = 0;
   private lastT = 0;
@@ -78,11 +74,27 @@ export class Pipeline {
     // trace ~once/sec: a span tree over the stages, never every frame (120fps)
     const doTrace = obsEnabled() && this.frameN++ % 60 === 0;
 
+    // native-res crop of a normalized region — the optical decoder localizes on
+    // the coarse procW frame but samples cells from this (many more px/cell far away)
+    const sctx = this.sampleCanvas.getContext("2d")!;
+    const sampleRegion = (nx: number, ny: number, nw: number, nh: number): ImageData | null => {
+      const vW = v.videoWidth, vH = v.videoHeight;
+      const sw = Math.round(nw * vW), sh = Math.round(nh * vH);
+      if (sw < 8 || sh < 4) return null;
+      const dw = Math.min(320, sw), dh = Math.min(200, sh);
+      this.sampleCanvas.width = dw; this.sampleCanvas.height = dh;
+      sctx.drawImage(v, nx * vW, ny * vH, sw, sh, 0, 0, dw, dh);
+      return sctx.getImageData(0, 0, dw, dh);
+    };
+
     const runStages = (): Track[] => {
       const faces = traceStage("detect", () => detectFaces(this.detector, this.detectCanvas, tMs));
       const tracks = traceStage("track", () => this.tracker.update(faces));
       const imageData = pctx.getImageData(0, 0, procW, procH); // A's decoder reads this
-      const beacons = traceStage("decode", () => decodeBeacons(imageData, tMs));
+      const beacons = traceStage("decode", () =>
+        flags.BEACON_DECODER === "optical"
+          ? opticalDecode(imageData, tMs, sampleRegion)
+          : stubDecode(imageData, tMs));
       traceStage("associate", () => associate(tracks, beacons, tMs));
       traceStage("decide", () => decide(tracks, getConsent, tMs)); // sync read of the Solana-synced cache
       traceStage("blur+notify", () => {

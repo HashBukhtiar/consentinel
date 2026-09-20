@@ -13,14 +13,19 @@ let sampling = false;
 export function initSentry(): void {
   const dsn = import.meta.env.VITE_SENTRY_DSN;
   if (!dsn) return;
-  Sentry.init({
-    dsn,
-    environment: "hackathon",
-    integrations: [Sentry.browserTracingIntegration()],
-    tracesSampleRate: 1.0, // we self-sample (one frame/sec), so keep what we create
-    enableLogs: true,
-  });
-  enabled = true;
+  try {
+    Sentry.init({
+      dsn,
+      environment: "hackathon",
+      integrations: [Sentry.browserTracingIntegration()],
+      tracesSampleRate: 1.0, // we self-sample (one frame/sec), so keep what we create
+      enableLogs: true,
+    });
+    enabled = true;
+  } catch (e) {
+    // a malformed DSN must never white-screen the demo app
+    console.warn("Sentry disabled — init failed (check VITE_SENTRY_DSN):", e);
+  }
 }
 
 export const obsEnabled = () => enabled;
@@ -30,7 +35,9 @@ export function traceFrame<T>(fn: () => T): T {
   if (!enabled) return fn();
   sampling = true;
   try {
-    return Sentry.startSpan({ name: "pipeline.frame", op: "pipeline" }, fn);
+    // forceTransaction: the loop may run inside an active span (pageload/nav);
+    // without this, pipeline.frame nests under it instead of being its own trace.
+    return Sentry.startSpan({ name: "pipeline.frame", op: "pipeline", forceTransaction: true }, fn);
   } finally {
     sampling = false;
   }
