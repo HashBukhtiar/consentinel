@@ -69,6 +69,11 @@ button.stop { color: var(--blur); border-color: rgba(255, 93, 115, .4); backgrou
 button.stop:hover { background: rgba(255, 93, 115, .1); border-color: var(--blur); }
 button.seg { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 button.seg.optical { color: var(--clear); border-color: rgba(53, 208, 122, .4); }
+input.glasses { font-family: var(--mono); font-size: 12px; color: var(--fg); background: var(--card);
+  border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; width: 168px; }
+input.glasses:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:disabled:hover { border-color: var(--line); }
 .error { background: rgba(255, 93, 115, .1); border: 1px solid rgba(255, 93, 115, .45);
   color: #ffcdd5; padding: 9px 13px; border-radius: 9px; font-size: 13px; }
 

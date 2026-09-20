@@ -24,6 +24,7 @@ import { BadgeHub, norm } from "./badges";
 import { Voice, alertText } from "./voice";
 import { Chain, HttpError } from "./chain";
 import { RadioBridge } from "./radio";
+import { ThruLedger } from "./thru";
 import { explorerUrl } from "../../registry/client/src/core";
 
 const log = (m: string) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
@@ -38,9 +39,12 @@ const broadcast = (msg: unknown) => {
   const s = JSON.stringify(msg);
   for (const ws of operators) if (ws.readyState === ws.OPEN) { try { ws.send(s); } catch { /* dropped */ } }
 };
+// Thru: the per-event evidence ledger (Solana keeps the periodic checkpoint).
+const thru = new ThruLedger(log);
+await thru.probe();
 const chain = new Chain(
   audit,
-  (b: Batch, entries: AuditEntry[]) =>
+  (b: Batch, entries: AuditEntry[]) => {
     broadcast({
       type: "attested",
       batch: b.seq,
@@ -51,7 +55,11 @@ const chain = new Chain(
       head: b.head,
       count: b.seq,
       explorer: b.signature.startsWith("(") ? null : explorerUrl("tx", b.signature, config.SOLANA_CLUSTER),
-    }),
+    });
+    // mirror the checkpoint to Thru so the two ledgers cross-reference each other
+    void thru.commit("attest", `at${b.seq}`, { batch: b.seq, head: b.head, solana: b.signature, events: entries.length })
+      .then((c) => c && broadcast({ type: "thru", kind: "attest", batch: b.seq, seed: c.seed, account: c.account, explorer: c.explorer, ms: c.ms }));
+  },
   log,
 );
 await chain.init();
@@ -88,6 +96,9 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
   const delivery = badges.send(entry.beaconId, { type: "filmed", beaconId: entry.beaconId, at: entry.at, cameraId: entry.cameraId, buzzMs: 600, say });
   const radioEv = radio.filmEvent(entry.beaconId); // CNSF<id> → the badge's red alarm
   chain.enqueue(entry);
+  // Thru: commit this one event immediately (no batching) — the evidence ledger
+  void thru.commit("film-event", `ev${entry.seq}`, { eventId: entry.eventId, seq: entry.seq, hash: entry.hash, beacon: entry.beaconId, at: entry.at })
+    .then((c) => c && broadcast({ type: "thru", kind: "film-event", eventId: entry.eventId, seed: c.seed, account: c.account, explorer: c.explorer, ms: c.ms }));
   // voice is async and never blocks the response
   voice.speak(say, entry.beaconId).then(
     (spoken) => broadcast({ type: "alert", beaconId: entry.beaconId, eventId: entry.eventId, text: spoken.text, provider: spoken.provider, audioUrl: spoken.audioUrl, cached: spoken.cached, playedLocally: config.PLAY_AUDIO_LOCALLY }),
@@ -101,6 +112,7 @@ async function handleFilmEvent(ev: unknown): Promise<object> {
     badge: delivery,
     radio: radioEv ? { frame: radioEv.frame, delivered: radioEv.delivered, queued: radioEv.queued } : null,
     attest: chain.enabled ? "queued for next interval" : "disabled",
+    thru: thru.enabled ? "committing" : "disabled",
   };
 }
 

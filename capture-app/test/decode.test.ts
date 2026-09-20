@@ -1,72 +1,58 @@
-// Self-check for the optical decoder — synthetic frames, no camera/badge.
-// Proves: our cell mapping inverts A's decodeFrame, the localizer finds the
-// patch, and symbol assembly + CRC reconstruct the id end-to-end.
+// Self-check for the optical decoder (firmware v0.4 static key) — synthetic
+// frames, no camera/badge. Proves: our painter inverts A's glyph table + CRC,
+// the localizer finds the ring, a key decodes with the right consent colour,
+// and fine (native-res) sampling recovers a decode the coarse frame cannot.
 import assert from "node:assert";
-import { hex2, packPayload, unpackPayload, decodeFrame } from "@shared/beacon";
-import { symbolCells, paintPatch } from "../src/decode/patch";
-import { decodeBeacons, _internal } from "../src/decode/beacon";
+import { hex2, packPayload, unpackPayload, decodeKey, SEG_TO_NIBBLE } from "@shared/beacon";
+import { keyMasks, paintKey } from "../src/decode/patch";
+import { _internal } from "../src/decode/beacon";
 
-const ID = 0x4e; // Maaz's real demo id
+const ID = 0x4e; // Maaz's demo id
 
-// 1) our painter must be the exact inverse of A's decoder
+// 1) painter ↔ decoder contract
 assert.equal(unpackPayload(packPayload(ID)), ID, "crc round-trip");
-assert.equal(decodeFrame([0, 1, 2].map((s) => symbolCells(ID, s))), ID, "symbolCells ↔ decodeFrame");
+assert.equal(decodeKey(keyMasks(ID).map((m) => SEG_TO_NIBBLE.get(m)!)), ID, "glyph masks ↔ decodeKey");
 
-// 2) full pixel pipeline: paint 3 symbols, decode them back through the camera path
-const W = 240, H = 140, rect = { x: 60, y: 50, w: 138, h: 60 }; // aspect ≈ 2.3
-const frameFor = (s: number): ImageData => {
+// 2) full pixel pipeline: paint the key, decode it back through the camera path
+const W = 320, H = 240, rect = { x: 40, y: 30, w: 240, h: 180 }; // aspect 1.33
+const frame = (optIn: boolean, lit = true): ImageData => {
   const data = new Uint8ClampedArray(W * H * 4);
-  paintPatch(data, W, H, rect, symbolCells(ID, s));
+  paintKey(data, W, H, rect, ID, optIn, lit);
   return { data, width: W, height: H } as unknown as ImageData;
 };
+assert.ok(_internal.locatePatches(frame(true)).length >= 1, "localizer finds the ring");
 
-assert.ok(_internal.locatePatches(frameFor(0)).length >= 1, "localizer finds the patch");
-
-// 3 cycles so the "confirm an id twice" guard fires (each symbol ~2 frames)
-let got: string | undefined;
-let t = 0;
-for (let cycle = 0; cycle < 3; cycle++) {
-  for (const s of [0, 1, 2]) {
-    const f = frameFor(s);
-    for (let k = 0; k < 2; k++) {
-      const out = decodeBeacons(f, (t += 50));
-      if (out.length) got = out[0].beaconId;
-    }
-  }
-}
-assert.equal(got, hex2(ID), `decodes beacon id ${hex2(ID)}`);
-
-console.log("ok — optical decode: cell mapping, localization, assembly+CRC →", hex2(ID));
-
-// 3) fine-sampling path: a coarse frame with a localizable but data-less patch
-// (border only) can't decode — but a native-res crop of the same region can.
-// This is the distance de-risk (localize coarse, sample fine).
-const dark = [false, false, false, false, false, false];
-const borderOnly = (): ImageData => {
-  const data = new Uint8ClampedArray(W * H * 4);
-  paintPatch(data, W, H, rect, dark);
-  return { data, width: W, height: H } as unknown as ImageData;
+// two consecutive confident frames ⇒ trusted
+const run = (f: ImageData, dec = _internal.newDecoder()) => {
+  let out = dec.decode(f, 100);
+  out = dec.decode(f, 150);
+  return out[0];
 };
-const hiFor = (s: number): ImageData => {
-  const cw = 300, ch = 130, data = new Uint8ClampedArray(cw * ch * 4);
-  paintPatch(data, cw, ch, { x: 0, y: 0, w: cw, h: ch }, symbolCells(ID, s));
+const mint = run(frame(true));
+assert.equal(mint?.beaconId, hex2(ID), `decodes ${hex2(ID)}`);
+assert.equal(mint?.lightConsent, "opt_in", "mint digits ⇒ opt_in hint");
+const rose = run(frame(false));
+assert.equal(rose?.beaconId, hex2(ID), "same id in rose");
+assert.equal(rose?.lightConsent, "opt_out", "rose digits ⇒ opt_out hint");
+
+// a single frame is NOT enough — the id must repeat before it's trusted
+assert.equal(_internal.newDecoder().decode(frame(true), 100).length, 0, "one read is not yet trusted");
+
+console.log("ok — static key: glyphs+CRC, localization, decode + consent colour →", hex2(ID));
+
+// 3) fine-sampling path: a coarse frame whose key has no lit segments can't
+// decode — but a native-res crop of the same region (with the digits) can.
+const hi = (optIn: boolean): ImageData => {
+  const cw = 320, ch = 240, data = new Uint8ClampedArray(cw * ch * 4);
+  paintKey(data, cw, ch, { x: 0, y: 0, w: cw, h: ch }, ID, optIn);
   return { data, width: cw, height: ch } as unknown as ImageData;
 };
-
 const decA = _internal.newDecoder();
-let coarseOnly: string | undefined; let ta = 0;
-for (let c = 0; c < 3; c++) for (const s of [0, 1, 2]) for (let k = 0; k < 2; k++) {
-  const o = decA.decode(borderOnly(), (ta += 50));
-  if (o.length) coarseOnly = o[0].beaconId;
-}
-assert.equal(coarseOnly, undefined, "border-only + no sampler ⇒ no decode");
-
+decA.decode(frame(true, false), 100);
+assert.equal(decA.decode(frame(true, false), 150).length, 0, "ring-only + no sampler ⇒ no decode");
 const decB = _internal.newDecoder();
-let fine: string | undefined; let tb = 0; let curS = 0;
-for (let c = 0; c < 3; c++) for (const s of [0, 1, 2]) { curS = s; for (let k = 0; k < 2; k++) {
-  const o = decB.decode(borderOnly(), (tb += 50), () => hiFor(curS));
-  if (o.length) fine = o[0].beaconId;
-} }
-assert.equal(fine, hex2(ID), "fine sampler recovers the decode the coarse frame misses");
+decB.decode(frame(true, false), 100, () => hi(true));
+const fine = decB.decode(frame(true, false), 150, () => hi(true))[0];
+assert.equal(fine?.beaconId, hex2(ID), "fine sampler recovers the decode the coarse frame misses");
 
 console.log("ok — fine sampling: native-res crop recovers a decode coarse cannot →", hex2(ID));

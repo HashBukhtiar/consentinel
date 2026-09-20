@@ -25,6 +25,7 @@ that commits to the off-chain film-event log).
 | `firmware/` | the badge: Lua app that blinks the optical beacon, mirrors consent, raises the alarm, sends `CNSR` on the A button | A |
 | `shared/beacon.ts` | the optical + radio wire format (badge ↔ capture app ↔ service) | A |
 | `capture-app/` | the CV core (web/TS): camera → detect → decode → associate → blur → FilmEvent, plus the operator panel | A (beacon decode) + B (vision) |
+| `glasses-relay/` | the iOS app that carries Meta glasses frames to the capture app (the glasses only talk to a phone) | B |
 | `registry/` | **Solana**: Anchor program (`consent_registry`), tests, TS client, demo scripts | C |
 | `service/` | notify + audit service: FilmEvent → badge radio alarm + ElevenLabs + on-chain attestation; badge radio bridge; badge-signed consent relay | C |
 | `data/demo/` | seed consents for the demo | C |
@@ -251,6 +252,32 @@ Service flags: `service/.env.example` (`SERVICE_TOKEN`, `CORS_ORIGIN`,
 | The badge has no Wi-Fi — how does it talk to the chain? | Light up (id only) and BLE radio down/up through a bridge. The service is the badge's registry client: it turns `CNSR` into the signed update and mirrors every on-chain change back as `CNSC`. |
 | Doesn't the operator hold everyone's keys in the demo? | Only because the firmware isn't signing yet — see the honesty note above; `badge-press` from another process shows the same path, and a wallet that owns a record signs for itself. |
 | Default for someone with no badge? | Blur. |
+
+## Thru (Unto Labs) — the evidence ledger
+
+Two chains, two jobs. **Solana** holds *authorization*: who consents — rare,
+owner-signed, revocable (the Anchor registry above). **Thru** holds *evidence*:
+what the camera did — frequent and append-only. Batching evidence to a slow
+chain every 10 s means the record lags reality, so on Thru the service commits
+**every film-event and every attestation checkpoint the moment it happens**,
+each as its own Alphanet account (`thru uploader upload`, ~3 s), readable by
+anyone on `scan.thru.org`. The checkpoint commit carries the Solana signature,
+so the two ledgers cross-reference. Nothing visual is ever stored — the same
+ids, hashes and timestamps the Solana attestation already carries.
+
+Setup (once, on the demo laptop):
+
+```bash
+npm i -g thru
+thru keys generate consentinel && thru account create consentinel
+thru faucet withdraw consentinel 5000 --fee-payer consentinel
+```
+
+`service/src/thru.ts` auto-disables (and says why on startup) if the CLI or
+funds are missing, so the hero path never depends on it. In the operator panel
+each capture gets a **Thru ↗** link and the **Evidence ledger** section streams
+commits. Alphanet is a developer network and this integration was written
+during the event; the fee-payer key is a throwaway.
 
 ## Licenses / credits
 

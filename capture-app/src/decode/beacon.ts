@@ -1,48 +1,46 @@
-// Optical beacon decoder: camera frame → BeaconReading[]. Finds the badge's
-// white-bordered patch, samples its 3×2 cell grid, recovers the symbol clock
-// from the clock lane, and hands 3 symbols to A's decodeFrame() for CRC-checked
-// assembly. Anything it can't confidently read is simply absent → the face
-// stays blurred (DEFAULT_CONSENT). See shared/beacon.ts for the wire format.
+// Optical beacon decoder (firmware v0.4, STATIC key): camera frame →
+// BeaconReading[]. Finds the badge's white ring, samples the 21 segments of
+// its three 7-segment hex digits, maps each glyph to a nibble, and CRC-checks
+// the 12-bit payload with A's unpackPayload(). One frame is enough; an id is
+// trusted once it reads the same on two consecutive confident frames.
+// Anything unreadable is simply absent → the face stays blurred.
 //
-// ponytail: naive full-frame connected-components + axis-aligned sampling — no
-// perspective correction. Fine for the controlled 2–3-badge demo (wearers face
-// the camera). Upgrade to a quad homography if badges tilt. Thresholds in
-// flags.BEACON_* need ~10 min of tuning against a real badge/recording.
-import { decodeFrame, hex2, FRAME_CELL, SYMBOLS_PER_FRAME, PATCH, BORDER_PX } from "@shared/beacon";
-import type { SymbolSample } from "@shared/beacon";
-import type { BeaconReading, DecodeBeacons } from "../shared/schema";
-import { cellRectFrac } from "./patch";
+// The digit colour is a restrict-only consent hint (mint = opt-in, rose =
+// opt-out) surfaced as `lightConsent`; decide() can only use it to BLUR.
+//
+// ponytail: axis-aligned sampling, no perspective correction — fine for the
+// controlled 2–3-badge demo (wearers face the camera). Thresholds in
+// flags.BEACON_* are tuned against real recordings; retune with scripts/tune.ts.
+import { hex2, decodeKey, SEG_TO_NIBBLE, DIGITS } from "@shared/beacon";
+import type { BeaconReading, DecodeBeacons, ConsentState } from "../shared/schema";
+import { segRectFrac, RING_REF_FRACS, SEGS } from "./patch";
 import { flags } from "../config/flags";
 
 type Frame = ImageData; // uses only .data/.width/.height
 type Box = { x: number; y: number; w: number; h: number };
 
-// Average luma over a box (robust to noise, perspective offset, JPEG ringing).
-function boxLum(f: Frame, cx: number, cy: number, hw: number, hh: number): number {
+// Mean of max(R,G,B) over a box — "lit" regardless of hue (mint, rose and white
+// all read ~255; black reads ~0) — plus mean R and G to tell mint from rose.
+function boxStat(f: Frame, cx: number, cy: number, hw: number, hh: number) {
   const x0 = Math.max(0, Math.round(cx - hw)), x1 = Math.min(f.width - 1, Math.round(cx + hw));
   const y0 = Math.max(0, Math.round(cy - hh)), y1 = Math.min(f.height - 1, Math.round(cy + hh));
-  let sum = 0, cnt = 0;
+  let mx = 0, r = 0, g = 0, n = 0;
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const o = (y * f.width + x) * 4;
-      // "whiteness" = min channel: white cells are achromatic (high in all
-      // channels), the blue background is chromatic (low R), so this separates
-      // them even when the blue is bright/over-exposed (luma does not).
-      sum += Math.min(f.data[o], f.data[o + 1], f.data[o + 2]);
-      cnt++;
+      const R = f.data[o], G = f.data[o + 1], B = f.data[o + 2];
+      mx += Math.max(R, G, B); r += R; g += G; n++;
     }
   }
-  return cnt ? sum / cnt : 0;
+  return n ? { max: mx / n, r: r / n, g: g / n } : { max: 0, r: 0, g: 0 };
 }
 
 // ---- localization: bright connected components filtered by size/aspect ------
-// Split into scan + reject so the tuning page (tune.html) can show WHY a
-// candidate was thrown away. locatePatches() is the production path and keeps
-// exactly the old behaviour.
+// Split into scan + reject so the tuning page can show WHY a candidate was
+// thrown away. locatePatches() is the production path.
 export interface Component { x: number; y: number; w: number; h: number; count: number; aspect: number; fill: number }
 
-/** Smallest blob worth reporting to a human. Well below BEACON_MIN_W so the
- *  tuner can say "your badge is 14px, the floor is 22" instead of nothing. */
+/** Smallest blob worth reporting to a human — well below BEACON_MIN_W. */
 const DIAG_MIN_W = 6;
 
 function scanComponents(f: Frame): Component[] {
@@ -77,13 +75,13 @@ function scanComponents(f: Frame): Component[] {
   return out;
 }
 
-/** null = accepted as a badge patch; otherwise a human-readable reason. */
+/** null = accepted as a key; otherwise a human-readable reason. */
 export function rejectReason(c: Component, frameW: number): string | null {
   if (c.w < flags.BEACON_MIN_W) return `too small (w ${c.w} < ${flags.BEACON_MIN_W})`;
   if (c.w > frameW * 0.95) return "fills the frame";
   if (c.aspect < flags.BEACON_ASPECT_MIN) return `too tall (aspect ${c.aspect.toFixed(2)} < ${flags.BEACON_ASPECT_MIN})`;
   if (c.aspect > flags.BEACON_ASPECT_MAX) return `too wide (aspect ${c.aspect.toFixed(2)} > ${flags.BEACON_ASPECT_MAX})`;
-  if (c.fill < 0.08) return `too sparse (fill ${c.fill.toFixed(3)} < 0.08)`; // noise, not a border ring
+  if (c.fill < 0.08) return `too sparse (fill ${c.fill.toFixed(3)} < 0.08)`; // noise, not a ring
   return null;
 }
 
@@ -93,111 +91,95 @@ function locatePatches(f: Frame): Box[] {
     .map((c) => ({ x: c.x, y: c.y, w: c.w, h: c.h }));
 }
 
-// ---- cell sampling ----------------------------------------------------------
-export interface Sampled { bits: boolean[]; lums: number[]; thr: number; borderLum: number; minMargin: number; confident: boolean }
+// ---- segment sampling -------------------------------------------------------
+export interface Sampled {
+  bits: boolean[]; // 21 segment states, digit-major
+  lums: number[]; // per-segment "lit" level (mean max-channel)
+  thr: number;
+  borderLum: number; // ring reference
+  minMargin: number;
+  confident: boolean;
+  nibbles: (number | null)[]; // per digit; null = not a valid glyph
+  light: ConsentState; // mint ⇒ opt_in, rose ⇒ opt_out
+}
 
-// Brightness of the always-lit border: max over the 4 side midpoints (the
-// border is uniform, so max is a stable white reference even under tilt/noise).
-function borderLum(f: Frame, bb: Box): number {
-  const bx = (BORDER_PX / PATCH.w) * bb.w, by = (BORDER_PX / PATCH.h) * bb.h;
-  const hw = Math.max(1, bx * 0.4), hh = Math.max(1, by * 0.4);
-  return Math.max(
-    boxLum(f, bb.x + bb.w * 0.5, bb.y + by * 0.5, hw, hh), // top
-    boxLum(f, bb.x + bb.w * 0.5, bb.y + bb.h - by * 0.5, hw, hh), // bottom
-    boxLum(f, bb.x + bx * 0.5, bb.y + bb.h * 0.5, hw, hh), // left
-    boxLum(f, bb.x + bb.w - bx * 0.5, bb.y + bb.h * 0.5, hw, hh), // right
-  );
+// White level of the always-lit ring: max over its 4 mid-edges (uniform, so
+// max is a stable reference under tilt/noise).
+function ringLevel(f: Frame, bb: Box): number {
+  const hw = Math.max(1, bb.w * 0.02), hh = Math.max(1, bb.h * 0.02);
+  return Math.max(...RING_REF_FRACS.map(([fx, fy]) => boxStat(f, bb.x + fx * bb.w, bb.y + fy * bb.h, hw, hh).max));
 }
 
 function sampleCells(f: Frame, bb: Box): Sampled {
-  const bl = borderLum(f, bb);
-  const thr = flags.BEACON_CELL_LIT_FRAC * bl;
-  const bits: boolean[] = [];
-  const lums: number[] = [];
-  let minMargin = Infinity, anyDark = false;
-  for (let i = 1; i <= 6; i++) {
-    const r = cellRectFrac(i);
-    // average the central 60% of each cell — tolerant of the tilt
-    const lum = boxLum(f,
-      bb.x + (r.fx + r.fw / 2) * bb.w, bb.y + (r.fy + r.fh / 2) * bb.h,
-      r.fw * bb.w * 0.3, r.fh * bb.h * 0.3);
-    lums.push(lum);
-    bits.push(lum > thr);
-    if (lum <= thr) anyDark = true;
-    minMargin = Math.min(minMargin, Math.abs(lum - thr));
+  const ring = ringLevel(f, bb);
+  const thr = flags.BEACON_CELL_LIT_FRAC * ring;
+  const bits: boolean[] = [], lums: number[] = [], nibbles: (number | null)[] = [];
+  let minMargin = Infinity, anyDark = false, anyLit = false, litR = 0, litG = 0;
+  for (let d = 0; d < DIGITS; d++) {
+    let mask = 0;
+    for (let s = 1; s <= SEGS; s++) {
+      const r = segRectFrac(d, s);
+      // average the central ~70% of each segment — tolerant of tilt
+      const st = boxStat(f, bb.x + (r.fx + r.fw / 2) * bb.w, bb.y + (r.fy + r.fh / 2) * bb.h, r.fw * bb.w * 0.35, r.fh * bb.h * 0.35);
+      const lit = st.max > thr;
+      bits.push(lit); lums.push(st.max);
+      if (lit) { mask |= 1 << (s - 1); anyLit = true; litR += st.r; litG += st.g; } else anyDark = true;
+      minMargin = Math.min(minMargin, Math.abs(st.max - thr));
+    }
+    nibbles.push(SEG_TO_NIBBLE.get(mask) ?? null);
   }
-  // trust the read only with a bright border, a dark cell (rejects solid-white
-  // blobs), and every cell clear of the threshold; CRC rejects the rest
-  const confident = bl > flags.BEACON_MIN_BORDER && anyDark && minMargin > bl * flags.BEACON_CONTRAST_FRAC;
-  return { bits, lums, thr, borderLum: bl, minMargin, confident };
+  // trust the read only with a bright ring, both lit and dark segments (every
+  // valid 3-digit key has both; rejects solid blobs), and every segment clear
+  // of the threshold; the glyph table + CRC reject the rest
+  const confident = ring > flags.BEACON_MIN_BORDER && anyLit && anyDark && minMargin > ring * flags.BEACON_CONTRAST_FRAC;
+  return { bits, lums, thr, borderLum: ring, minMargin, confident, nibbles, light: litG > litR ? "opt_in" : "opt_out" };
 }
 
-// Funnel counters for the tuning page (tune.html). Bumping four integers per
-// frame is free; nothing in the hero path reads them.
+// Funnel counters for the tuning page. Bumping integers per frame is free.
 export const decoderStats = {
-  symbols: 0, // distinct cell patterns seen (≈ symbol transitions)
-  anchors: 0, // symbol-0 frame markers seen
-  assembled: 0, // 3-symbol groups completed
+  symbols: 0, // confident reads
+  anchors: 0, // reads where all three glyphs were valid
+  assembled: 0, // payloads formed (== anchors for a static key)
   crcOk: 0,
   crcFail: 0,
-  confirmed: 0, // ids that repeated within BEACON_CONFIRM_MS and became trusted
+  confirmed: 0, // ids that read the same twice in a row and became trusted
   reset() { this.symbols = this.anchors = this.assembled = this.crcOk = this.crcFail = this.confirmed = 0; },
 };
 
-// ---- per-patch symbol assembly ---------------------------------------------
-// The badge holds each symbol for ~2-3 camera frames, so we treat a change in
-// the full cell pattern as a symbol boundary (the clock lane alone is a
-// free-running square wave and unreliable under motion blur). The frame marker
-// (lit on symbol 0) anchors each frame. A decoded id must repeat before we
-// trust it — kills the ~1/16 chance a motion-blur transition passes CRC.
-class FrameAssembler {
-  private lastKey: string | null = null;
-  private collecting: SymbolSample[] | null = null;
-  private hist: { id: number; t: number }[] = [];
+// ---- per-key confirmation ---------------------------------------------------
+// Static key ⇒ no assembly. An id is trusted after the same CRC-valid read on
+// two consecutive confident frames — cheap insurance against a motion-blurred
+// glyph that happens to pass CRC.
+class KeyReader {
+  private prevId: number | null = null;
+  private prevCount = 0;
   lastId: number | null = null;
+  lastLight: ConsentState = "opt_out";
   lastDecodeMs = 0;
 
-  feed(sym: SymbolSample, tMs: number): void {
-    // key on frame marker + data cells; the clock lane (idx 0) is too noisy
-    // under tilt/motion blur to segment on.
-    const key = sym.slice(1).map((b) => (b ? 1 : 0)).join("");
-    if (key === this.lastKey) return; // same symbol still on screen
-    this.lastKey = key;
+  feed(s: Sampled, tMs: number): void {
     decoderStats.symbols++;
-
-    if (sym[FRAME_CELL - 1]) {
-      decoderStats.anchors++;
-      this.collecting = [sym]; // symbol 0 — (re)anchor the frame
-    } else if (this.collecting) {
-      this.collecting.push(sym);
-      if (this.collecting.length === SYMBOLS_PER_FRAME) {
-        const id = decodeFrame(this.collecting);
-        this.collecting = null;
-        decoderStats.assembled++;
-        if (id === null) decoderStats.crcFail++;
-        if (id !== null) {
-          decoderStats.crcOk++;
-          this.hist = this.hist.filter((h) => tMs - h.t < flags.BEACON_CONFIRM_MS);
-          this.hist.push({ id, t: tMs });
-          if (this.hist.filter((h) => h.id === id).length >= 2) {
-            if (this.lastId !== id) decoderStats.confirmed++;
-            this.lastId = id; this.lastDecodeMs = tMs;
-          }
-        }
-      }
+    if (s.nibbles.some((n) => n === null)) { this.prevId = null; this.prevCount = 0; return; }
+    decoderStats.anchors++; decoderStats.assembled++;
+    const id = decodeKey(s.nibbles as number[]);
+    if (id === null) { decoderStats.crcFail++; this.prevId = null; this.prevCount = 0; return; }
+    decoderStats.crcOk++;
+    this.prevCount = id === this.prevId ? this.prevCount + 1 : 1;
+    this.prevId = id;
+    if (this.prevCount >= 2) {
+      if (this.lastId !== id) decoderStats.confirmed++;
+      this.lastId = id; this.lastLight = s.light; this.lastDecodeMs = tMs;
     }
   }
 }
 
-// ---- decoder: track patches across frames, run an assembler per patch -------
-// A patch's assembler MUST survive the frequent non-confident frames (motion
-// blur, occlusion) or it never accumulates enough decodes to confirm an id — so
-// tracks persist for BEACON_TRACK_MISS frames, exactly like the face tracker.
-type PatchTrack = { cx: number; cy: number; asm: FrameAssembler; missed: number };
+// ---- decoder: track keys across frames, one reader per key ------------------
+// A key's reader survives non-confident frames (motion blur, occlusion) for
+// BEACON_TRACK_MISS frames, exactly like the face tracker.
+type PatchTrack = { cx: number; cy: number; asm: KeyReader; missed: number };
 
 // A higher-resolution crop of a normalized [0,1] frame region, supplied by the
-// loop from the source video. Lets us localize cheap (coarse frame) but sample
-// fine (native res) — many more pixels per cell when the badge is far/small.
+// loop from the source video: localize cheap (coarse frame), sample fine.
 export type RegionSampler = (nx: number, ny: number, nw: number, nh: number) => ImageData | null;
 
 class BeaconDecoder {
@@ -206,16 +188,14 @@ class BeaconDecoder {
   decode(f: Frame, tMs: number, sampler?: RegionSampler): BeaconReading[] {
     const unmatched = new Set(this.tracks);
     for (const bb of locatePatches(f)) {
-      // localize on the coarse frame, sample cells from a native-res crop of
-      // just this patch region — the distance de-risk.
       const fine = sampler?.(bb.x / f.width, bb.y / f.height, bb.w / f.width, bb.h / f.height);
       const s = fine ? sampleCells(fine, { x: 0, y: 0, w: fine.width, h: fine.height }) : sampleCells(f, bb);
       if (!s.confident) continue;
       const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
       let tr = nearest(unmatched, cx, cy, flags.BEACON_MATCH_PX);
       if (tr) { unmatched.delete(tr); tr.cx = cx; tr.cy = cy; tr.missed = 0; }
-      else { tr = { cx, cy, asm: new FrameAssembler(), missed: 0 }; this.tracks.push(tr); }
-      tr.asm.feed(s.bits, tMs);
+      else { tr = { cx, cy, asm: new KeyReader(), missed: 0 }; this.tracks.push(tr); }
+      tr.asm.feed(s, tMs);
     }
     for (const tr of unmatched) tr.missed++;
     this.tracks = this.tracks.filter((tr) => tr.missed <= flags.BEACON_TRACK_MISS);
@@ -223,7 +203,12 @@ class BeaconDecoder {
     const out: BeaconReading[] = [];
     for (const tr of this.tracks) {
       if (tr.asm.lastId !== null && tMs - tr.asm.lastDecodeMs < flags.BEACON_ID_HOLD_MS) {
-        out.push({ beaconId: hex2(tr.asm.lastId), imagePosition: { x: tr.cx / f.width, y: tr.cy / f.height }, confidence: 1 });
+        out.push({
+          beaconId: hex2(tr.asm.lastId),
+          imagePosition: { x: tr.cx / f.width, y: tr.cy / f.height },
+          confidence: 1,
+          lightConsent: tr.asm.lastLight,
+        });
       }
     }
     return out;
@@ -243,12 +228,12 @@ const decoder = new BeaconDecoder();
 export const decodeBeacons = (frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] =>
   decoder.decode(frame, tMs, sampler);
 
-/** A decoder with its own patch-track state — for the offline sweep, which
+/** A decoder with its own key-track state — for the offline sweep, which
  *  runs hundreds of independent trials and must not leak state between them. */
 export function createDecoder(): DecodeBeacons {
   const d = new BeaconDecoder();
   return (frame, tMs) => d.decode(frame, tMs);
 }
 
-// exported for the self-check
+// exported for the self-check and the tuning page
 export const _internal = { locatePatches, sampleCells, scanComponents, newDecoder: () => new BeaconDecoder() };

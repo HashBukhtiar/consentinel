@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Pipeline, PipelineState } from "../pipeline/loop";
-import { listCameras, startCamera, startScreen } from "../sources/videoSource";
+import { listCameras, startCamera, startScreen, startGlasses } from "../sources/videoSource";
 import { flags } from "../config/flags";
 import { OperatorPanel } from "./OperatorPanel";
 import { chain, startConsent } from "../consent/store";
@@ -19,6 +19,8 @@ export function App() {
   const [source, setSource] = useState("");
   const [decoder, setDecoder] = useState<"stub" | "optical">(flags.BEACON_DECODER);
   const [error, setError] = useState("");
+  // The relay app prints this address on the phone; remembered so it's typed once.
+  const [glasses, setGlasses] = useState(() => localStorage.getItem("consentinel.glasses") ?? "");
 
   function setBeacon(mode: "stub" | "optical") { flags.BEACON_DECODER = mode; setDecoder(mode); }
 
@@ -86,6 +88,9 @@ export function App() {
             </select>
             <button className="primary" onClick={() => startCamera(deviceId || undefined).then((s) => begin(s, "camera")).catch(fail)}>Use camera</button>
             <button onClick={() => startScreen().then((s) => begin(s, "screen")).catch(fail)}>Share screen</button>
+            <input className="glasses" value={glasses} placeholder="ws://phone-ip:8080" aria-label="Glasses relay address"
+              onChange={(e) => { setGlasses(e.target.value); localStorage.setItem("consentinel.glasses", e.target.value); }} />
+            <button disabled={!glasses} onClick={() => startGlasses(glasses).then((s) => begin(s, "glasses")).catch(fail)}>Glasses</button>
             <button className={"seg " + decoder} onClick={() => setBeacon(decoder === "optical" ? "stub" : "optical")}
               title="stub = fixed demo beacons · optical = decode the real badge">
               Beacon · {decoder}

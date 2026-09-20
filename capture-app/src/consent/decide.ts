@@ -13,8 +13,11 @@ export function decide(tracks: Track[], getConsent: GetConsent, nowMs: number): 
     if (t.beaconId && nowMs - (t.boundAtMs ?? 0) > flags.BIND_TTL_MS) {
       t.beaconId = undefined;
       t.boundAtMs = undefined;
+      t.lightConsent = undefined;
     }
     t.consent = t.beaconId ? getConsent(t.beaconId) : "unknown";
-    t.blurred = t.consent !== "opt_in";
+    // The key's colour is RESTRICT-ONLY: rose (opt-out on the badge) blurs even
+    // if the chain says opt-in; mint can never clear a face on its own.
+    t.blurred = t.consent !== "opt_in" || t.lightConsent === "opt_out";
   }
 }

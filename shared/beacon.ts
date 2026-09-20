@@ -122,6 +122,55 @@ export function decodeFrame(symbols: readonly SymbolSample[]): number | null {
   return unpackPayload(payload);
 }
 
+// --------------------------------------------------------------- static key
+//
+// v0.4 firmware: the key is STATIC — a white ring around three giant
+// 7-segment hex digits spelling the same 12-bit payload (id<<4 | crc4). One
+// frame decodes; no clock, no timing. The digit COLOUR is a restrict-only
+// consent hint (mint = opt-in, rose = opt-out): it can make a face stricter,
+// never clear one — the chain record still has to say opt-in.
+// MUST match the geometry block in firmware/consentinel-beacon.lua.
+
+/** The whole panel is the key; the ring is its outer KEY_BORDER px. */
+export const KEY = { w: 320, h: 240 } as const;
+export const KEY_BORDER = 24;
+export const DIGITS = 3;
+export const DIGIT = { w: 76, h: 160, t: 18, gap: 14 } as const;
+export const DIGIT_HALF = Math.floor((DIGIT.h - 3 * DIGIT.t) / 2); // 53
+const KEY_IN_W = KEY.w - 2 * KEY_BORDER, KEY_IN_H = KEY.h - 2 * KEY_BORDER; // 272 x 192
+export const DIGIT_X0 = KEY_BORDER + Math.floor((KEY_IN_W - (DIGITS * DIGIT.w + (DIGITS - 1) * DIGIT.gap)) / 2); // 32
+export const DIGIT_Y0 = KEY_BORDER + Math.floor((KEY_IN_H - DIGIT.h) / 2); // 40
+
+/** 7-segment glyphs 0-F. Bit s-1 = segment s: 1 a(top) 2 b 4 c 8 d(bottom) 16 e 32 f 64 g(middle). */
+export const SEG = [
+  0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07,
+  0x7f, 0x6f, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71,
+] as const;
+export const SEG_TO_NIBBLE: ReadonlyMap<number, number> = new Map(SEG.map((m, i) => [m, i]));
+
+/** Segment s (1..7) of digit d (0 = most significant), in key pixels. Mirrors `seg_geom`. */
+export function segRect(d: number, s: number): { x: number; y: number; w: number; h: number } {
+  const { w: W, t: T } = DIGIT, H = DIGIT.h, Hf = DIGIT_HALF;
+  const dx = DIGIT_X0 + d * (W + DIGIT.gap), y0 = DIGIT_Y0;
+  switch (s) {
+    case 1: return { x: dx + T, y: y0, w: W - 2 * T, h: T };
+    case 2: return { x: dx + W - T, y: y0 + T, w: T, h: Hf };
+    case 3: return { x: dx + W - T, y: y0 + 2 * T + Hf, w: T, h: Hf };
+    case 4: return { x: dx + T, y: y0 + H - T, w: W - 2 * T, h: T };
+    case 5: return { x: dx, y: y0 + 2 * T + Hf, w: T, h: Hf };
+    case 6: return { x: dx, y: y0 + T, w: T, h: Hf };
+    default: return { x: dx + T, y: y0 + T + Hf, w: W - 2 * T, h: T };
+  }
+}
+
+export const KEY_COLOR = { optIn: 0x00ff84, optOut: 0xff0084 } as const; // MINT / ROSE
+
+/** Three hex nibbles (most significant first) → beacon id, or null on CRC failure ⇒ blur. */
+export function decodeKey(nibbles: readonly number[]): number | null {
+  if (nibbles.length !== DIGITS) return null;
+  return unpackPayload((nibbles[0] << 8) | (nibbles[1] << 4) | nibbles[2]);
+}
+
 // ------------------------------------------------------------------- radio
 
 /**

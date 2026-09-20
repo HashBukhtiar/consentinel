@@ -10,6 +10,7 @@ export interface BeaconReading {
   beaconId: string; // two uppercase hex digits — hex2() in @shared/beacon
   imagePosition: { x: number; y: number }; // normalized [0,1]; center of the patch quad
   confidence: number; // decode confidence 0..1
+  lightConsent?: ConsentState; // the key's digit colour: mint = opt_in, rose = opt_out (restrict-only)
 }
 
 // A tracked face in the current frame (internal to the capture app).
@@ -18,6 +19,7 @@ export interface Track {
   bbox: { x: number; y: number; w: number; h: number }; // normalized [0,1]
   beaconId?: string; // set by associate(); EXPIRES — see flags.BIND_TTL_MS
   boundAtMs?: number; // when beaconId was last (re)confirmed by a sighting
+  lightConsent?: ConsentState; // restrict-only hint from the key's colour (rose ⇒ blur)
   consent: Consent;
   blurred: boolean;
   missed: number; // frames since last detection (drives occlusion persistence)

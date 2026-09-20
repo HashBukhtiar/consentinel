@@ -9,10 +9,12 @@ import type { FilmEvent, Track } from "../shared/schema";
 // captured. Consent comes from the Solana-synced cache (ChainPanel); the stub
 // toggles remain only for CONSENT_SOURCE="stub" (no-network fallback).
 type RadioRow = Extract<OperatorMessage, { type: "radio" }>;
+type ThruRow = Extract<OperatorMessage, { type: "thru" }> & { at: number };
 type SvcInfo = {
   alert?: string; provider?: string;
   attested?: { signature: string; explorer: string | null; count: number };
   notify?: "notified" | "queued"; // did the film-event reach a badge transport?
+  thru?: { account: string; explorer: string; ms: number }; // committed to the Thru evidence ledger
 };
 
 export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: FilmEvent[] }) {
@@ -24,6 +26,7 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
   const [bridges, setBridges] = useState<number | null>(null);
   // beaconId → time a CNSF frame was actually delivered over the radio bridge
   const [radioOk, setRadioOk] = useState<Map<string, number>>(new Map());
+  const [ledger, setLedger] = useState<ThruRow[]>([]); // recent Thru commits (film-events + attest checkpoints)
   useEffect(() => {
     operatorLink.start();
     const t = setInterval(() => setSvcUp(operatorLink.connected), 1000);
@@ -34,6 +37,14 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
         setRadio((prev) => [m, ...prev].slice(0, 6));
         if (m.dir === "down" && m.frame.startsWith("CNSF") && (m.delivered ?? 0) > 0) {
           setRadioOk((prev) => new Map(prev).set(m.frame.slice(4).toUpperCase(), m.at));
+        }
+        return;
+      }
+      if (m.type === "thru") {
+        setLedger((prev) => [{ ...m, at: Date.now() }, ...prev].slice(0, 8));
+        if (m.kind === "film-event" && m.eventId) {
+          const id = m.eventId;
+          setSvc((prev) => new Map(prev).set(id, { ...prev.get(id), thru: { account: m.account, explorer: m.explorer, ms: m.ms } }));
         }
         return;
       }
@@ -139,12 +150,25 @@ export function OperatorPanel({ tracks, events }: { tracks: Track[]; events: Fil
               {s?.attested && (s.attested.explorer
                 ? <a href={s.attested.explorer} target="_blank" rel="noreferrer" title={`anchored on-chain in commitment #${s.attested.count}`}>anchored ↗</a>
                 : <span className="tagx" title="anchored (confirmed from on-chain state)">anchored</span>)}
+              {s?.thru && <a href={s.thru.explorer} target="_blank" rel="noreferrer" title={`committed to the Thru evidence ledger in ${(s.thru.ms / 1000).toFixed(1)}s — account ${s.thru.account}`}>Thru ↗</a>}
             </div>
             <span>{time(e.at)}</span>
           </div>
         );
       })}
       {!events.length && <div className="empty-row">No opted-out captures yet</div>}
+
+      <details className="debug">
+        <summary>Evidence ledger <span className="muted">Thru Alphanet{ledger.length ? ` · ${ledger.length}` : ""}</span></summary>
+        {ledger.map((r) => (
+          <div className="act" key={r.seed}>
+            <span className="t">{time(r.at)}</span>
+            <span className="x">{r.kind === "film-event" ? `capture ${r.eventId?.slice(0, 8)}` : `checkpoint #${r.batch}`} <span className="muted">· {(r.ms / 1000).toFixed(1)}s</span></span>
+            <a href={r.explorer} target="_blank" rel="noreferrer">account ↗</a>
+          </div>
+        ))}
+        {!ledger.length && <div className="empty-row">{svcUp ? "Waiting for the first commit" : "Service offline"}</div>}
+      </details>
 
       <details className="debug">
         <summary>Badge radio <span className={"dot " + (bridges ? "ok" : svcUp ? "warn" : "")} title={bridges ? `${bridges} bridge(s) on the air` : "No radio bridge connected"} /></summary>

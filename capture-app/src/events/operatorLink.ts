@@ -11,6 +11,7 @@ export type OperatorMessage =
   | { type: "alert-error"; beaconId: string; error: string }
   | { type: "attested"; batch: number; eventIds: string[]; beaconIds: string[]; heartbeat: boolean; signature: string; head: string; count: number; explorer: string | null }
   | { type: "delegated"; signature: string; explorer: string; consent: boolean; revision: number }
+  | { type: "thru"; kind: "film-event" | "attest"; eventId?: string; batch?: number; seed: string; account: string; explorer: string; ms: number }
   // badge radio (A ↔ C): CNSF/CNSC frames going down to the badge, CNSR requests coming up
   | { type: "radio"; at: number; dir: "down" | "up"; frame: string; transport: string; delivered?: number; queued?: boolean; outcome?: RadioOutcome }
   | { type: "bridge"; connected: number; at: number };

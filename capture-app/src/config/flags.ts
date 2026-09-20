@@ -34,8 +34,8 @@ export const flags = {
   BEACON_DECODER: (env.VITE_BEACON_DECODER ?? "optical") as "stub" | "optical",
   BEACON_BRIGHT_T: 175, // 0..255 threshold for the localization mask
   BEACON_MIN_BORDER: 110, // min border luma for a confident sample (real screen ≈ 190-210)
-  BEACON_ASPECT_MIN: 1.5, // patch aspect ≈ 304/132 = 2.3
-  BEACON_ASPECT_MAX: 3.2,
+  BEACON_ASPECT_MIN: 1.05, // v0.4 static key: the ring is the whole 320x240 panel, aspect 1.33
+  BEACON_ASPECT_MAX: 1.7,
   BEACON_MIN_W: 14, // min patch width in px at PROCESS_WIDTH (decoder floor is ~22; leave headroom)
   BEACON_CELL_LIT_FRAC: 0.5, // cell lit if lum > frac × borderLum
   BEACON_CONTRAST_FRAC: 0.12, // min |cellLum − threshold| / borderLum to trust the read
