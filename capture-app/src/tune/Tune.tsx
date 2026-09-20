@@ -8,20 +8,19 @@ import { useEffect, useRef, useState } from "react";
 import { startCamera, startScreen, listCameras } from "../sources/videoSource";
 import { _internal, rejectReason, decoderStats, decodeBeacons } from "../decode/beacon";
 import type { Component, Sampled } from "../decode/beacon";
-import { cellRectFrac } from "../decode/patch";
+import { SAMPLE_BOX_FRAC } from "../decode/patch";
 import { flags } from "../config/flags";
-import { CLOCK_CELL, FRAME_CELL, DATA_CELLS } from "@shared/beacon";
+import { ALPHABET, ALPHABET_NAMES } from "@shared/beacon";
 
 type Knob = { key: keyof typeof flags; min: number; max: number; step: number; help: string };
 
 const KNOBS: Knob[] = [
   { key: "BEACON_BRIGHT_T", min: 60, max: 250, step: 1, help: "luma above this counts as 'lit' for finding the patch. Too high: badge never found. Too low: the whole room is one blob." },
   { key: "BEACON_MIN_W", min: 8, max: 120, step: 1, help: "smallest patch width in px. Raise to reject noise, lower to decode from farther." },
-  { key: "BEACON_ASPECT_MIN", min: 0.8, max: 2.5, step: 0.05, help: "patch is 304x132 ⇒ aspect 2.3. Widen if the badge is tilted." },
-  { key: "BEACON_ASPECT_MAX", min: 2.0, max: 6, step: 0.05, help: "upper aspect bound." },
+  { key: "BEACON_ASPECT_MIN", min: 0.6, max: 2.0, step: 0.05, help: "patch is the whole 320x240 screen ⇒ aspect 1.33. Widen if the badge is tilted." },
+  { key: "BEACON_ASPECT_MAX", min: 1.0, max: 4, step: 0.05, help: "upper aspect bound." },
   { key: "BEACON_MIN_BORDER", min: 60, max: 255, step: 1, help: "min border brightness to trust a read. A real screen reads ~190-210." },
-  { key: "BEACON_CELL_LIT_FRAC", min: 0.2, max: 0.9, step: 0.01, help: "a cell is lit if luma > this x border luma." },
-  { key: "BEACON_CONTRAST_FRAC", min: 0.02, max: 0.4, step: 0.01, help: "every cell must clear the threshold by this much. Lower = more reads accepted, more CRC failures." },
+  { key: "BEACON_SYMBOL_MARGIN", min: 1.0, max: 2.5, step: 0.01, help: "nearest colour must be this many x closer than the runner-up. 1.0 accepts everything (wrong ids); higher rejects more reads. 1.3 measured zero wrong ids." },
   { key: "BEACON_MATCH_PX", min: 8, max: 200, step: 1, help: "how far a patch may move between frames and still be the same badge." },
   { key: "BEACON_TRACK_MISS", min: 0, max: 90, step: 1, help: "frames a patch survives without a confident read." },
   { key: "BEACON_CONFIRM_MS", min: 200, max: 6000, step: 50, help: "an id must decode twice inside this window to be trusted." },
@@ -29,8 +28,7 @@ const KNOBS: Knob[] = [
   { key: "PROCESS_WIDTH", min: 320, max: 1280, step: 40, help: "decode input width. Higher = decode from farther, costs CPU." },
 ];
 
-const CELL_NAME = (i: number) =>
-  i === CLOCK_CELL ? "clk" : i === FRAME_CELL ? "frm" : `d${3 - DATA_CELLS.indexOf(i as 3 | 4 | 5 | 6)}`;
+const cssRGB = (c: readonly number[]) => `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
 
 interface Shot {
   comps: { c: Component; reason: string | null; s?: Sampled }[];
@@ -86,7 +84,7 @@ export function Tune() {
       .slice(0, 24)
       .map((c) => {
         const reason = rejectReason(c, W);
-        return { c, reason, s: reason === null ? _internal.sampleCells(frame, c) : undefined };
+        return { c, reason, s: reason === null ? _internal.sampleSymbol(frame, c) : undefined };
       });
 
     // overlay
@@ -101,13 +99,14 @@ export function Tune() {
       ctx.fillStyle = ctx.strokeStyle;
       ctx.fillText(reason ?? (s?.confident ? "OK" : "low contrast"), c.x, Math.max(10, c.y - 3));
       if (s) {
-        for (let i = 1; i <= 6; i++) {
-          const r = cellRectFrac(i);
-          const cx = c.x + (r.fx + r.fw / 2) * c.w, cy = c.y + (r.fy + r.fh / 2) * c.h;
-          const hw = r.fw * c.w * 0.3, hh = r.fh * c.h * 0.3;
-          ctx.strokeStyle = s.bits[i - 1] ? "#ffffff" : "#3366ff";
-          ctx.lineWidth = 1;
-          ctx.strokeRect(cx - hw, cy - hh, hw * 2, hh * 2);
+        const cx = c.x + SAMPLE_BOX_FRAC.fcx * c.w, cy = c.y + SAMPLE_BOX_FRAC.fcy * c.h;
+        const hw = SAMPLE_BOX_FRAC.fhw * c.w, hh = SAMPLE_BOX_FRAC.fhh * c.h;
+        ctx.strokeStyle = s.symbol === null ? "#3366ff" : cssRGB(ALPHABET[s.symbol]);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(cx - hw, cy - hh, hw * 2, hh * 2);
+        if (s.symbol !== null) {
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.fillText(ALPHABET_NAMES[s.symbol], cx - hw, cy - hh - 3);
         }
       }
     }
@@ -167,11 +166,11 @@ export function Tune() {
               {[
                 ["1. bright blobs found", shot.comps.length, "raise BEACON_BRIGHT_T if this is huge"],
                 ["2. shaped like a patch", shot.accepted, "size/aspect — widen if 0 but you can see the badge"],
-                ["3. confident reads", shot.comps.filter((x) => x.s?.confident).length, "BEACON_MIN_BORDER / CONTRAST_FRAC"],
+                ["3. confident reads", shot.comps.filter((x) => x.s?.confident).length, "BEACON_MIN_BORDER / SYMBOL_MARGIN"],
                 ["4. symbol changes", stats.symbols, "0 ⇒ patch found but not changing: wrong app or frozen"],
                 ["5. frame anchors", stats.anchors, "0 ⇒ never seeing symbol 0"],
-                ["6. 3-symbol groups", stats.assembled, ""],
-                ["7. CRC passed", `${stats.crcOk} / ${stats.assembled} (${pct(stats.crcOk, stats.assembled)})`, "low ⇒ sampling wrong cells or dropping symbols"],
+                ["6. 9-symbol frames", stats.assembled, ""],
+                ["7. CRC passed", `${stats.crcOk} / ${stats.assembled} (${pct(stats.crcOk, stats.assembled)})`, "low ⇒ dropping symbols, or sampling off-centre"],
                 ["8. ids confirmed", stats.confirmed, "needs 2 matching decodes inside BEACON_CONFIRM_MS"],
               ].map(([label, val, hint]) => (
                 <tr key={String(label)}>
@@ -186,15 +185,19 @@ export function Tune() {
 
         {best?.s && (
           <section>
-            <h3 style={{ margin: "0 0 6px" }}>cell sample (largest patch)</h3>
-            <div>border luma <b>{best.s.borderLum.toFixed(0)}</b> (need &gt; {flags.BEACON_MIN_BORDER}) · lit threshold <b>{best.s.thr.toFixed(0)}</b></div>
-            <div>min margin <b>{best.s.minMargin.toFixed(1)}</b> (need &gt; {(best.s.borderLum * flags.BEACON_CONTRAST_FRAC).toFixed(1)})</div>
-            <table style={{ marginTop: 4 }}>
-              <tbody>
-                <tr>{[1, 2, 3, 4, 5, 6].map((i) => <td key={i} style={{ padding: "1px 7px 1px 0", opacity: 0.6 }}>{CELL_NAME(i)}</td>)}</tr>
-                <tr>{best.s.lums.map((l, i) => <td key={i} style={{ padding: "1px 7px 1px 0", color: best.s!.bits[i] ? "#fff" : "#6688ff" }}>{l.toFixed(0)}</td>)}</tr>
-              </tbody>
-            </table>
+            <h3 style={{ margin: "0 0 6px" }}>symbol sample (largest patch)</h3>
+            <div>border luma <b>{best.s.borderLum.toFixed(0)}</b> (need &gt; {flags.BEACON_MIN_BORDER})</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+              <span style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #555", background: cssRGB(best.s.ref) }} title="border ring (white reference)" />
+              <span style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #555", background: cssRGB(best.s.px) }} title="interior sample" />
+              <b style={{ color: best.s.symbol === null ? "#ff4444" : cssRGB(ALPHABET[best.s.symbol]) }}>
+                {best.s.symbol === null ? "no clear symbol" : ALPHABET_NAMES[best.s.symbol]}
+              </b>
+            </div>
+            <div style={{ opacity: 0.55, fontSize: 11, marginTop: 4 }}>
+              ring / interior as sampled. "no clear symbol" = nothing beat the runner-up by
+              BEACON_SYMBOL_MARGIN — a uniform blob always lands here, by design.
+            </div>
           </section>
         )}
 

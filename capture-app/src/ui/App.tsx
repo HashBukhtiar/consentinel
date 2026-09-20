@@ -77,6 +77,14 @@ export function App() {
   return (
     <div className="app">
       <header>
+        {/* Drop a file at capture-app/public/logo.svg and it appears here.
+            Until then the mark hides itself and the wordmark stands alone. */}
+        <img
+          className="logo"
+          src="/logo.svg"
+          alt=""
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+        />
         <h1>Consentinel <span>capture</span></h1>
         <div className="tag">fail-safe: blur unless opt-in</div>
         {chain && <div className="tag chain" title={chain.status.programId}>consent: Solana {chain.status.cluster}</div>}

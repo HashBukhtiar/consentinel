@@ -10,6 +10,10 @@ export interface BeaconReading {
   beaconId: string; // two uppercase hex digits — hex2() in @shared/beacon
   imagePosition: { x: number; y: number }; // normalized [0,1]; center of the patch quad
   confidence: number; // decode confidence 0..1
+  // Consent as carried IN THE LIGHT (the MINT/ROSE frame marker, cross-checked
+  // against payload bit 7). Present on an optical decode; absent from the stub.
+  // Advisory here — decide() still gates on the chain-synced cache.
+  optIn?: boolean;
 }
 
 // A tracked face in the current frame (internal to the capture app).

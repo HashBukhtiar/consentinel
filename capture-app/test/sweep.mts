@@ -13,10 +13,10 @@
 //
 //   npm run sweep            summary matrix
 //   npm run sweep -- --tune  also sweep the thresholds themselves
-import { paintPatch, symbolCells } from "../src/decode/patch";
+import { paintPatch, symbolColors } from "../src/decode/patch";
 import { createDecoder } from "../src/decode/beacon";
 import { flags } from "../src/config/flags";
-import { hex2, PATCH } from "@shared/beacon";
+import { hex2, PATCH, SYMBOLS_PER_FRAME } from "@shared/beacon";
 
 type Frame = { data: Uint8ClampedArray; width: number; height: number };
 
@@ -40,17 +40,22 @@ function render(c: Conditions, id: number, symbol: number, W = 720): Frame {
     data[o] = data[o + 1] = data[o + 2] = c.ambient;
     data[o + 3] = 255;
   }
-  // paint at full white into a scratch buffer, then map 255→screen, 0→ambient
+  // paint the true panel colour into a scratch buffer, then model the screen:
+  // each channel scales by the screen's peak luma, and no channel goes fully
+  // dark (a real LCD's black still leaks). Colour MUST survive this step —
+  // the classifier has nothing else to work with.
   const pw = Math.round(c.patchW), ph = Math.round(pw / (PATCH.w / PATCH.h)); // real badge aspect
   const patch = new Uint8ClampedArray(pw * ph * 4);
-  paintPatch(patch, pw, ph, { x: 0, y: 0, w: pw, h: ph }, symbolCells(id, symbol));
+  paintPatch(patch, pw, ph, { x: 0, y: 0, w: pw, h: ph }, symbolColors(id, true)[symbol]);
+  const black = Math.min(c.screen * 0.06, c.ambient);
   const px = Math.round((W - pw) / 2), py = Math.round(H * 0.6);
   for (let y = 0; y < ph; y++) {
     for (let x = 0; x < pw; x++) {
       const src = (y * pw + x) * 4;
       const dst = ((py + y) * W + px + x) * 4;
-      const v = patch[src] > 127 ? c.screen : Math.min(c.screen * 0.06, c.ambient);
-      data[dst] = data[dst + 1] = data[dst + 2] = v;
+      for (let k = 0; k < 3; k++) {
+        data[dst + k] = Math.max(black, (patch[src + k] / 255) * c.screen);
+      }
     }
   }
   if (c.blur > 0) boxBlur(data, W, H, Math.round(c.blur));
@@ -58,8 +63,9 @@ function render(c: Conditions, id: number, symbol: number, W = 720): Frame {
     for (let i = 0; i < W * H; i++) {
       const o = i * 4;
       const n = c.noise ? (Math.random() * 2 - 1) * c.noise : 0;
-      const v = data[o] + c.glare + n;
-      data[o] = data[o + 1] = data[o + 2] = v;
+      data[o] += c.glare + n;
+      data[o + 1] += c.glare + n;
+      data[o + 2] += c.glare + n;
     }
   }
   return { data, width: W, height: H };
@@ -69,19 +75,20 @@ function boxBlur(data: Uint8ClampedArray, W: number, H: number, r: number): void
   const src = Uint8ClampedArray.from(data);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      let sum = 0, n = 0;
+      let sr = 0, sg = 0, sb = 0, n = 0;
       for (let dy = -r; dy <= r; dy++) {
         const yy = y + dy;
         if (yy < 0 || yy >= H) continue;
         for (let dx = -r; dx <= r; dx++) {
           const xx = x + dx;
           if (xx < 0 || xx >= W) continue;
-          sum += src[(yy * W + xx) * 4];
+          const so = (yy * W + xx) * 4;
+          sr += src[so]; sg += src[so + 1]; sb += src[so + 2];
           n++;
         }
       }
       const o = (y * W + x) * 4;
-      data[o] = data[o + 1] = data[o + 2] = sum / n;
+      data[o] = sr / n; data[o + 1] = sg / n; data[o + 2] = sb / n;
     }
   }
 }
@@ -93,7 +100,7 @@ function decodes(c: Conditions, id = 0x4e): boolean {
   const decode = createDecoder();
   let t = 0;
   for (let rep = 0; rep < 3; rep++) {
-    for (let s = 0; s < 3; s++) {
+    for (let s = 0; s < SYMBOLS_PER_FRAME; s++) {
       const f = render(c, id, s);
       for (let hold = 0; hold < 2; hold++) {
         const out = decode(f as unknown as ImageData, (t += 33));
@@ -141,8 +148,8 @@ console.log(`\nbeacon robustness sweep — PROCESS_WIDTH ${flags.PROCESS_WIDTH},
 const w = Math.max(...rows.map((r) => r[0].length));
 for (const [k, v, note] of rows) console.log(`  ${k.padEnd(w)}  ${v.padEnd(26)} ${note}`);
 
-// patch width → real-world distance. The badge patch is 304 of 320 screen px
-// across a ~35 mm wide display, so it subtends ~33 mm.
+// patch width → real-world distance. The patch is now the WHOLE 320 px screen
+// across a ~35 mm wide display, so it subtends the full 35 mm.
 const minW = Number(/\d+/.exec(rows[0][1])?.[0] ?? 0);
 if (minW) {
   const PATCH_MM = 33;
@@ -170,8 +177,7 @@ if (process.argv.includes("--tune")) {
   for (const [key, values] of [
     ["BEACON_BRIGHT_T", [110, 130, 150, 175, 200]],
     ["BEACON_MIN_BORDER", [80, 95, 110, 130, 160]],
-    ["BEACON_CELL_LIT_FRAC", [0.35, 0.45, 0.5, 0.6, 0.7]],
-    ["BEACON_CONTRAST_FRAC", [0.04, 0.08, 0.12, 0.18, 0.25]],
+    ["BEACON_SYMBOL_MARGIN", [1.05, 1.15, 1.3, 1.5, 1.8]],
     ["BEACON_MIN_W", [14, 18, 22, 30]],
   ] as [keyof typeof flags, number[]][]) {
     const original = flags[key];

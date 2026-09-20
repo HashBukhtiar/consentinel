@@ -8,7 +8,9 @@ body { margin: 0; background: var(--bg); color: var(--fg);
   font: 14px/1.4 ui-monospace, "SF Mono", Menlo, monospace; }
 .app { max-width: 1200px; margin: 0 auto; padding: 16px; }
 
-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+/* Optional brand mark: capture-app/public/logo.svg. Absent => hidden by onError. */
+.logo { height: 28px; width: auto; display: block; }
 h1 { font-size: 20px; margin: 0; }
 h1 span { color: var(--muted); font-weight: 400; }
 .tag { margin-left: auto; color: var(--blur); border: 1px solid var(--line);
