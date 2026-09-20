@@ -320,8 +320,11 @@ const keyDecoder = new KeyDecoder();
 function keyDecode(frame: ImageData, tMs: number, sampler?: RegionSampler): BeaconReading[] {
   const out = keyDecoder.decode(frame, tMs, sampler);
   const d = keyDecoder.debug;
-  // the overlay draws every candidate; specks would only clutter it
-  const shown = d.candidates.filter((c) => !c.status.startsWith("too small")).slice(0, 8);
+  // the overlay draws the candidates: once a key is read, only the read ones (the
+  // rejected blobs — a green shirt, a red chair — are noise then); when nothing
+  // reads they stay, as the answer to "what does it see?"
+  const read = d.candidates.filter((c) => c.fit);
+  const shown = (read.length ? read : d.candidates.filter((c) => !c.status.startsWith("too small"))).slice(0, 8);
   lastDebug = {
     width: d.width, height: d.height, bright: 0, ms: d.ms,
     candidates: shown.map((c) => ({ box: c.fit ? c.fit.key : c.box, borderLum: 0, confident: !!c.fit, symbol: null, label: c.status })),

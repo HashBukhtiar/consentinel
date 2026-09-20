@@ -34,7 +34,9 @@
 //      the cluster (RegionSampler) — many more pixels per segment.
 //   4. CONFIRM. An id must decode KEY_CONFIRM_N times within BEACON_CONFIRM_MS
 //      before it is reported (two consecutive frames ≈ 100 ms), and is held for
-//      BEACON_ID_HOLD_MS after the last decode. Consent rides on the colour.
+//      BEACON_ID_HOLD_MS after the last decode — or KEY_HOLD_SEEN_MS while a
+//      blob of its hue still sits where the key was (unreadable, not gone).
+//      Consent rides on the colour.
 //
 // Every "no" here means the face stays blurred (DEFAULT_CONSENT). Nothing is
 // guessed: a misread segment fails the glyph table or the CRC, a wrong grid
@@ -526,7 +528,7 @@ export function fitCluster(f: Frame, cl: KeyCluster, trace?: string[], trim = fl
 }
 
 // ---- 4. decoder: clusters → fits (fine crop when possible) → tracks → readings ----
-type KTrack = { cx: number; cy: number; hist: { id: number; optIn: boolean; t: number }[]; lastId: number | null; lastOptIn: boolean; lastMs: number; missed: number };
+type KTrack = { cx: number; cy: number; w: number; h: number; hist: { id: number; optIn: boolean; t: number }[]; lastId: number | null; lastOptIn: boolean; lastMs: number; seenMs: number; missed: number };
 
 const overlapFrac = (a: Box, b: Box): number => {
   const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
@@ -576,13 +578,28 @@ export class KeyDecoder {
       const cx = fit.key.x + fit.key.w / 2, cy = fit.key.y + fit.key.h / 2;
       let tr: KTrack | null = null, bd = flags.BEACON_MATCH_PX ** 2;
       for (const t of unmatched) { const d = (t.cx - cx) ** 2 + (t.cy - cy) ** 2; if (d < bd) { bd = d; tr = t; } }
-      if (tr) { unmatched.delete(tr); tr.cx = cx; tr.cy = cy; tr.missed = 0; }
-      else { tr = { cx, cy, hist: [], lastId: null, lastOptIn: fit.optIn, lastMs: 0, missed: 0 }; this.tracks.push(tr); }
+      if (tr) { unmatched.delete(tr); tr.cx = cx; tr.cy = cy; tr.w = fit.key.w; tr.h = fit.key.h; tr.seenMs = tMs; tr.missed = 0; }
+      else { tr = { cx, cy, w: fit.key.w, h: fit.key.h, hist: [], lastId: null, lastOptIn: fit.optIn, lastMs: 0, seenMs: tMs, missed: 0 }; this.tracks.push(tr); }
       tr.hist = tr.hist.filter((h) => tMs - h.t < flags.BEACON_CONFIRM_MS);
       tr.hist.push({ id: fit.id, optIn: fit.optIn, t: tMs });
       if (tr.hist.filter((h) => h.id === fit.id && h.optIn === fit.optIn).length >= flags.KEY_CONFIRM_N) {
         tr.lastId = fit.id; tr.lastOptIn = fit.optIn; tr.lastMs = tMs;
       }
+    }
+    // A confirmed badge that is still IN VIEW but unreadable this frame (motion
+    // blur, a hand, the white bar's bloom on the last digit, a glance down) keeps
+    // its id longer: the hold stretches to KEY_HOLD_SEEN_MS while a blob of its
+    // hue still covers its last key box, and the position follows that blob so
+    // the binding keeps pointing at the wearer. A badge that left the frame, or
+    // switched hue (consent toggled), gets only the plain BEACON_ID_HOLD_MS.
+    for (const tr of [...unmatched]) {
+      if (tr.lastId === null) continue;
+      const kb: Box = { x: tr.cx - tr.w / 2, y: tr.cy - tr.h / 2, w: tr.w, h: tr.h };
+      const cls: KeyClass = tr.lastOptIn ? 1 : 2;
+      const seen = clusters.find((cl) => cl.cls === cls && overlapFrac(cl.box, kb) >= flags.KEY_SEEN_OVERLAP);
+      if (!seen) continue;
+      tr.seenMs = tMs; tr.cx = seen.box.x + seen.box.w / 2; tr.cy = seen.box.y + seen.box.h / 2; tr.missed = 0;
+      unmatched.delete(tr);
     }
     for (const tr of unmatched) tr.missed++;
     this.tracks = this.tracks.filter((tr) => tr.missed <= flags.BEACON_TRACK_MISS);
@@ -590,7 +607,9 @@ export class KeyDecoder {
     const out: BeaconReading[] = [];
     for (const tr of this.tracks) {
       dbg.tracks.push({ cx: tr.cx, cy: tr.cy, lastId: tr.lastId, sinceDecodeMs: tr.lastId === null ? Infinity : tMs - tr.lastMs, missed: tr.missed });
-      if (tr.lastId !== null && tMs - tr.lastMs < flags.BEACON_ID_HOLD_MS) {
+      const since = tMs - tr.lastMs;
+      const held = since < flags.BEACON_ID_HOLD_MS || (since < flags.KEY_HOLD_SEEN_MS && tMs - tr.seenMs < flags.KEY_SEEN_TTL_MS);
+      if (tr.lastId !== null && held) {
         out.push({ beaconId: hex2(tr.lastId), imagePosition: { x: tr.cx / f.width, y: tr.cy / f.height }, confidence: 1, optIn: tr.lastOptIn });
       }
     }

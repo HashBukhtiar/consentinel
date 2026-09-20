@@ -101,6 +101,13 @@ export const flags = {
   KEY_LED_CORE_FRAC: 0.01, // …and whose inner half holds at least this fraction of the blob's mask pixels in saturated white (halos measured 2–5%, digits 0)…
   KEY_LED_CORE_MIN_PX: 4, // …and at least this many such pixels
   KEY_CONFIRM_N: 2, // decodes of the same id+consent within BEACON_CONFIRM_MS before it is reported
+  // A confirmed badge that is still in view (a blob of its hue covers its last key box)
+  // but cannot be read this moment keeps its id this long after the last clean read;
+  // BEACON_ID_HOLD_MS applies once the blob is gone. Live, the read comes and goes
+  // with motion blur and the white bar's bloom, and every gap blurred the wearer.
+  KEY_HOLD_SEEN_MS: 6000,
+  KEY_SEEN_OVERLAP: 0.3, // …the blob must cover this fraction of the smaller of (blob, last key box)
+  KEY_SEEN_TTL_MS: 300, // …and have been seen within this long
   // seq decoder knobs (measured on data/diag 2026-09-20, 1.5 m, 20 fps):
   SEQ_DIFF_T: 60, // sum |ΔR|+|ΔG|+|ΔB| between consecutive frames that counts as "changed" (badge symbol changes measure 40–400; sensor noise ~20)
   SEQ_MIN_W: 8, // smallest blinking rectangle worth tracking, px at PROCESS_WIDTH (~3 m at 1280)
@@ -145,7 +152,7 @@ export const flags = {
   PROCESS_WIDTH: Number(env.VITE_PROCESS_WIDTH ?? 1280), // 1280: the badge needs the pixels (1080p webcam); drop to 720 on a slow laptop
   DISPLAY_MAX_WIDTH: 960, // composited output width cap
   IOU_MATCH: 0.3, // tracker match threshold
-  TRACK_MAX_MISSED: 10, // frames to hold a blur through occlusion (~0.6s @15fps)
+  TRACK_MAX_MISSED: 25, // frames to hold a track (its blur AND its badge binding) through a detection gap (~1 s @25fps); a track that dies takes the binding with it and the wearer flickers to blurred until the next read
   PIXELATE_SIZE: 14, // block size in px; bigger = blockier
   // How the blur is composited (header button flips it live):
   //   "frame": DEFAULT DENY — the whole frame is pixelated and clear windows are
