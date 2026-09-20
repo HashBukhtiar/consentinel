@@ -72,7 +72,9 @@ Contracts live in [`src/shared/schema.ts`](src/shared/schema.ts):
 src/sources/videoSource.ts   camera | screen | file → one HTMLVideoElement
 src/decode/beacon.ts         optical decoder: patch → cells → clock → decodeFrame (A's wire format)
 src/decode/patch.ts          patch geometry + pixel paint (shared by decoder & self-check)
-src/vision/detect.ts         MediaPipe BlazeFace (detection only, no identity)
+src/vision/detect.ts         MediaPipe BlazeFace (detection only, no identity) — the in-browser fallback
+src/vision/remote.ts         client for the YOLO sidecar (vision/server.py): YOLOv8x-face + badge glyph model on the GPU
+src/decode/remoteKey.ts      the sidecar's CRC-valid key readings → the classical decoder's confirm/hold (key.ts ingest)
 src/vision/track.ts          IOU tracker → stable trackId, persists blur on occlusion
 src/vision/associate.ts      beacon → nearest face above, sticky on the track
 src/vision/blur.ts           canvas-2D pixelation
@@ -91,8 +93,13 @@ Tuning knobs in `flags.ts`: `PROCESS_WIDTH` (speed), `PIXELATE_SIZE`,
 `TRACK_MAX_MISSED` (occlusion hold), `BLUR_PAD`, `CONSENT_CACHE_SYNC_MS`,
 `CONSENT_STALE_MS`.
 
-**Beacon decoder:** `BEACON_DECODER` is `"stub"` (fixed beacons, safe hero path)
-or `"optical"` (real decode of A's patch). The `BEACON_*` thresholds are tuned
+**Beacon decoder:** `BEACON_DECODER` is `"optical"` (real decode of A's patch,
+the default) or `"stub"` (fixed fake beacons, no-badge fallback). The pipeline
+runs once per *video* frame (pixel-fingerprint gated), not per display refresh:
+the decoder's miss counters are tuned at the video rate, exactly like
+`scripts/tune.ts`. **overlay: on** draws candidates/decodes on the feed and the
+**Beacons** panel explains a non-decode (too small, too dim, low contrast, no
+repeat yet). `?clip=/demo/<file>.mp4` runs the pipeline on a recording. The `BEACON_*` thresholds are tuned
 against Maaz's badge recording — verified decoding id `4E` cleanly, no false ids.
 Re-tune for new footage with `tsx scripts/tune.ts <raw-rgba> <w> <h>` (extract
 frames with `ffmpeg -i clip.mov -vf scale=480:-2 -f rawvideo -pix_fmt rgba out.raw`).
